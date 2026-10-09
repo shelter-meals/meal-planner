@@ -45,6 +45,12 @@ import {
   type GroceryLine,
   type MealGroup,
 } from './domain'
+import {
+  compareRestaurantRank,
+  createDraftOrderLines,
+  type MenuDiscoveryResult,
+  type RestaurantRankEvidence,
+} from './menuData'
 import { AuthGate } from './auth/AuthGate'
 import { useAuth } from './auth/AuthContext'
 import {
@@ -61,17 +67,20 @@ import {
   type StoredPlan,
 } from './services/firebase'
 import {
+  getAvailabilityRank,
   getDeliveryStatus,
   getDietTag,
   getHoursState,
   searchFoodPlaces,
   type HoursState,
 } from './services/openMap'
+import { discoverMenus } from './services/menuDiscovery'
 import type { MealPlanData } from './types'
 import './App.css'
 
 type ResultFilter = 'restaurants' | 'groceries'
 const PLACE_PAGE_SIZE = 8
+const MENU_SCAN_LIMIT = 5
 
 function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Try again.'
@@ -127,22 +136,80 @@ function MapStatus({ state }: { state: HoursState }) {
   return <span className={`status-pill hours-${state}`}><Clock3 size={14} />{copy}</span>
 }
 
-function getSortValue(place: FoodPlace, scheduledTime: Date | null): number {
-  const hours = getHoursState(place.tags.opening_hours, scheduledTime)
-  const delivery = getDeliveryStatus(place.tags)
-  return (hours === 'open' ? 0 : hours === 'unknown' ? 1 : hours === 'unlisted' ? 2 : 3)
-    + (delivery === 'listed' ? 0 : delivery === 'unknown' ? 0.25 : 1)
+function safeWebsiteUrl(value: string | undefined): string | null {
+  if (!value) return null
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
+function formatPublishedPrice(price: number, currency: string | null): string {
+  if (!currency) return `${price.toFixed(2)} (currency not stated)`
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(price)
+  } catch {
+    return `${currency} ${price.toFixed(2)}`
+  }
+}
+
+function formatMenuRetrievalTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'time unavailable'
+    : new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
+function menuMatchCount(place: FoodPlace, groups: MealGroup[], menuResults: Record<string, MenuDiscoveryResult>): number {
+  const result = menuResults[place.id]
+  if (result?.status !== 'menu_found') return 0
+  return createDraftOrderLines(groups, result.items).filter((line) => line.candidates.length > 0).length
+}
+
+function rankEvidence(
+  place: FoodPlace,
+  scheduledTime: Date | null,
+  groups: MealGroup[],
+  menuResults: Record<string, MenuDiscoveryResult>,
+): RestaurantRankEvidence {
+  return {
+    availabilityRank: getAvailabilityRank(place.tags, scheduledTime),
+    distanceMiles: place.distanceMiles,
+    menuMatchCount: menuMatchCount(place, groups, menuResults),
+  }
+}
+
+function rankFoodPlaces(
+  places: FoodPlace[],
+  scheduledTime: Date | null,
+  groups: MealGroup[],
+  menuResults: Record<string, MenuDiscoveryResult>,
+): FoodPlace[] {
+  return places
+    .map((place) => ({ place, evidence: rankEvidence(place, scheduledTime, groups, menuResults) }))
+    .sort((a, b) => compareRestaurantRank(a.evidence, b.evidence))
+    .map(({ place }) => place)
 }
 
 function PlaceRow({
   place,
   scheduledTime,
   groups,
+  menuResult,
+  isMenuScanCandidate,
+  menuScanState,
 }: {
   place: FoodPlace
   scheduledTime: Date | null
   groups: MealGroup[]
+  menuResult?: MenuDiscoveryResult
+  isMenuScanCandidate: boolean
+  menuScanState: 'idle' | 'loading' | 'complete' | 'error'
 }) {
+  const [draftQuantities, setDraftQuantities] = useState<Record<string, number>>({})
+  const [selectedItems, setSelectedItems] = useState<Record<string, string>>({})
   const hours = getHoursState(place.tags.opening_hours, scheduledTime)
   const delivery = getDeliveryStatus(place.tags)
   const listedNeeds = DIETARY_NEEDS.filter((need) => groups.some((group) =>
@@ -150,7 +217,11 @@ function PlaceRow({
   ))
   const hasDietaryNeeds = groups.some((group) => group.diets.length > 0)
   const phone = place.tags.phone ?? place.tags['contact:phone']
-  const website = place.tags.website ?? place.tags['contact:website']
+  const website = safeWebsiteUrl(place.tags.website ?? place.tags['contact:website'] ?? undefined)
+  const menuUrl = menuResult?.menuUrl ? safeWebsiteUrl(menuResult.menuUrl) : null
+  const orderLines = menuResult?.status === 'menu_found'
+    ? createDraftOrderLines(groups, menuResult.items)
+    : []
   const deliveryText = delivery === 'listed'
     ? 'Delivery is listed; confirm with the business'
     : delivery === 'pickup'
@@ -193,6 +264,121 @@ function PlaceRow({
               {phone && <a href={`tel:${phone.replace(/[^\d+]/g, '')}`}><span>Call</span> {phone}</a>}
               {website && <a href={website} rel="noreferrer" target="_blank">Business website <ExternalLink size={13} /></a>}
             </div>
+          )}
+          {place.category === 'restaurant' && (
+            <section aria-label={`Published menu and draft order for ${place.name}`} className="menu-evidence">
+              <div className="menu-evidence__heading">
+                <ListChecks aria-hidden="true" size={16} />
+                <strong>Published menu check</strong>
+              </div>
+              {menuResult ? (
+                <>
+                  <p className={`menu-evidence__status menu-status-${menuResult.status}`}>{menuResult.message}</p>
+                  {menuResult.status === 'menu_found' && (
+                    <>
+                      {menuUrl && (
+                        <a className="menu-source" href={menuUrl} rel="noreferrer" target="_blank">
+                          Open menu source <ExternalLink size={13} />
+                        </a>
+                      )}
+                      <p className="menu-evidence__freshness">
+                        Retrieved {formatMenuRetrievalTime(menuResult.fetchedAt)}
+                        {' · '}Published menu data may be out of date.
+                      </p>
+                      {orderLines.length > 0 && (
+                        <div className="menu-order-lines">
+                          <h4>Draft quantities</h4>
+                          {orderLines.map((line) => {
+                            const options = line.candidates.length ? line.candidates : line.options
+                            const selectedId = selectedItems[line.groupId]
+                              ?? (line.candidates.length === 1 ? line.candidates[0].id : '')
+                            const selectedItem = options.find((item) => item.id === selectedId)
+                            const quantity = draftQuantities[line.groupId] ?? line.quantity
+                            return (
+                              <div className="menu-order-line" key={line.groupId}>
+                                <div className="menu-order-line__copy">
+                                  <strong>{line.groupName}</strong>
+                                  {options.length > 1 || (options.length > 0 && line.candidates.length === 0) ? (
+                                    <label className="menu-item-select">
+                                      <span className="sr-only">Menu item for {line.groupName}</span>
+                                      <select
+                                        onChange={(event) => setSelectedItems((current) => ({ ...current, [line.groupId]: event.target.value }))}
+                                        value={selectedId}
+                                      >
+                                        {line.candidates.length === 0 && (
+                                          <option value="">Select after confirming dietary fit</option>
+                                        )}
+                                        {options.map((item) => (
+                                          <option key={item.id} value={item.id}>
+                                            {item.name}{item.price !== null ? ` · ${formatPublishedPrice(item.price, item.currency)}` : ''}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                  ) : selectedItem ? (
+                                    <span>{selectedItem.name}</span>
+                                  ) : (
+                                    <span>No individual main was identified</span>
+                                  )}
+                                  {selectedItem?.price !== null && selectedItem?.price !== undefined && (
+                                    <small>Published price: {formatPublishedPrice(selectedItem.price, selectedItem.currency)} each</small>
+                                  )}
+                                  {line.reason && <small className="menu-group-warning">{line.reason} Choose only after direct confirmation.</small>}
+                                </div>
+                                <label className="menu-quantity">
+                                  <span className="sr-only">Quantity for {line.groupName}</span>
+                                  <input
+                                    min="0"
+                                    onChange={(event) => setDraftQuantities((current) => ({
+                                      ...current,
+                                      [line.groupId]: Math.max(0, Math.floor(Number(event.target.value) || 0)),
+                                    }))}
+                                    step="1"
+                                    type="number"
+                                    value={quantity}
+                                  />
+                                  <small>meals</small>
+                                </label>
+                                {line.requiresAllergenConfirmation && (
+                                  <p className="menu-allergen-warning">
+                                    Allergy ingredients and cross-contact are not stated. Call to confirm before ordering.
+                                  </p>
+                                )}
+                              </div>
+                            )
+                          })}
+                          <p className="menu-order-assumption">
+                            Suggestions follow the menu's listed order, not popularity or availability. Quantities assume one item per person; adjust portions and confirm with the business.
+                          </p>
+                        </div>
+                      )}
+                      <details className="published-menu-items">
+                        <summary>See {menuResult.items.length} published menu item{menuResult.items.length === 1 ? '' : 's'}</summary>
+                        <ul>
+                          {menuResult.items.map((item) => (
+                            <li key={item.id}>
+                              <strong>{item.name}</strong>
+                              {item.section && <span> · {item.section}</span>}
+                              {item.price !== null && <span> · {formatPublishedPrice(item.price, item.currency)}</span>}
+                              {item.description && <p>{item.description}</p>}
+                              {item.suitableForDiet.length > 0 && (
+                                <small>Website labels: {item.suitableForDiet.join(', ')}</small>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    </>
+                  )}
+                </>
+              ) : isMenuScanCandidate && menuScanState === 'loading' ? (
+                <p className="menu-evidence__status"><LoaderCircle aria-hidden="true" className="menu-spinner" size={14} /> Checking the listed website for published menu data…</p>
+              ) : isMenuScanCandidate ? (
+                <p className="menu-evidence__status">No menu result for this listing. Open the business website or call.</p>
+              ) : (
+                <p className="menu-evidence__status">Not checked in this limited menu scan. Use the business website or call.</p>
+              )}
+            </section>
           )}
           <a className="place-map-link" href={osmLink(place)} rel="noreferrer" target="_blank">
             View OpenStreetMap listing <ArrowUpRight size={14} />
@@ -375,6 +561,10 @@ function Planner() {
   const [radiusMiles, setRadiusMiles] = useState(5)
   const [busy, setBusy] = useState(false)
   const [places, setPlaces] = useState<FoodPlace[] | null>(null)
+  const [menuResults, setMenuResults] = useState<Record<string, MenuDiscoveryResult>>({})
+  const [menuScanCandidates, setMenuScanCandidates] = useState<string[]>([])
+  const [menuScanState, setMenuScanState] = useState<'idle' | 'loading' | 'complete' | 'error'>('idle')
+  const [menuScanError, setMenuScanError] = useState('')
   const [searchedAt, setSearchedAt] = useState<string | null>(null)
   const [dataTimestamp, setDataTimestamp] = useState<string | null>(null)
   const [searchedFingerprint, setSearchedFingerprint] = useState<string | null>(null)
@@ -402,11 +592,13 @@ function Planner() {
   const resultPlaces = useMemo(() => {
     if (!places) return []
     const category = filter === 'restaurants' ? 'restaurant' : 'grocery'
-    return places
-      .filter((place) => place.category === category)
-      .sort((a, b) => getSortValue(a, scheduledTime) - getSortValue(b, scheduledTime)
-        || a.distanceMiles - b.distanceMiles)
-  }, [filter, places, scheduledTime])
+    return rankFoodPlaces(
+      places.filter((place) => place.category === category),
+      scheduledTime,
+      groups,
+      menuResults,
+    )
+  }, [filter, groups, menuResults, places, scheduledTime])
   const selectedPlaceCount = useMemo(
     () => (places ?? []).filter((place) => place.category === 'restaurant').length,
     [places],
@@ -430,6 +622,23 @@ function Planner() {
     })
     return () => { active = false }
   }, [demoMode, user])
+
+  useEffect(() => {
+    if (!places || isSearchOutdated) return
+    const candidates = places.filter((place) => menuScanCandidates.includes(place.id))
+    if (candidates.length === 0) return
+    const controller = new AbortController()
+    void discoverMenus(candidates, controller.signal).then((results) => {
+      if (controller.signal.aborted) return
+      setMenuResults(Object.fromEntries(results.map((result) => [result.placeId, result])))
+      setMenuScanState('complete')
+    }).catch((scanError: unknown) => {
+      if (controller.signal.aborted) return
+      setMenuScanError(messageFrom(scanError))
+      setMenuScanState('error')
+    })
+    return () => controller.abort()
+  }, [isSearchOutdated, menuScanCandidates, places])
 
   useEffect(() => {
     if (!sharePlan || !user || demoMode) return
@@ -492,6 +701,10 @@ function Planner() {
     }
     setBusy(true)
     setPlaces(null)
+    setMenuResults({})
+    setMenuScanCandidates([])
+    setMenuScanError('')
+    setMenuScanState('idle')
     setSearchedAt(null)
     setDataTimestamp(null)
     const requestAddress = address
@@ -504,6 +717,17 @@ function Planner() {
     })
     try {
       const result = await searchFoodPlaces(requestAddress, searchRadius)
+      const requestTime = createScheduleDate(mealTime)
+      const scanCandidates = rankFoodPlaces(
+        result.matches.filter((place) => place.category === 'restaurant'),
+        requestTime,
+        requestGroups,
+        {},
+      )
+        .slice(0, MENU_SCAN_LIMIT)
+      setMenuScanCandidates(scanCandidates.map((place) => place.id))
+      setMenuScanError('')
+      setMenuScanState(scanCandidates.length ? 'loading' : 'complete')
       setPlaces(result.matches)
       setSearchedAt(new Date().toISOString())
       setDataTimestamp(result.dataTimestamp)
@@ -599,6 +823,10 @@ function Planner() {
     setAddress('')
     setAddressDisclosure(false)
     setPlaces(null)
+    setMenuResults({})
+    setMenuScanCandidates([])
+    setMenuScanError('')
+    setMenuScanState('idle')
     setSearchedAt(null)
     setDataTimestamp(null)
     setSearchedFingerprint(null)
@@ -939,8 +1167,28 @@ function Planner() {
 
               {resultPlaces.length > 0 ? (
                 <>
+                  {filter === 'restaurants' && (
+                    <div className="menu-scan-note" role="status">
+                      <ListChecks aria-hidden="true" size={16} />
+                      <p>
+                        {menuScanError
+                          ? `${menuScanError} Open the listed business website or call.`
+                          : `Checking up to ${MENU_SCAN_LIMIT} listed restaurant websites. Results prioritize mapped open status and delivery evidence, then distance, then menu fit. Only public structured menu data is read; menu pages may not provide current items or dietary evidence.`}
+                      </p>
+                    </div>
+                  )}
                   <div aria-live="polite" className="place-list">
-                    {resultPlaces.slice(0, visiblePlaceCount).map((place) => <PlaceRow groups={groups} key={place.id} place={place} scheduledTime={scheduledTime} />)}
+                    {resultPlaces.slice(0, visiblePlaceCount).map((place) => (
+                      <PlaceRow
+                        groups={groups}
+                        isMenuScanCandidate={menuScanCandidates.includes(place.id)}
+                        key={place.id}
+                        menuResult={menuResults[place.id]}
+                        menuScanState={menuScanState}
+                        place={place}
+                        scheduledTime={scheduledTime}
+                      />
+                    ))}
                   </div>
                   {visiblePlaceCount < resultPlaces.length && (
                     <button className="button-secondary show-more-places" onClick={() => setVisiblePlaceCount((count) => count + PLACE_PAGE_SIZE)} type="button">

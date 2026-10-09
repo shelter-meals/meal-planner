@@ -185,6 +185,14 @@ export function getDeliveryStatus(tags: Record<string, string>): 'listed' | 'pic
   return 'unknown'
 }
 
+export function getAvailabilityRank(tags: Record<string, string>, at: Date | null): number {
+  const hours = getHoursState(tags.opening_hours, at)
+  const delivery = getDeliveryStatus(tags)
+  const hoursRank = hours === 'open' ? 0 : hours === 'closed' ? 20 : 10
+  const deliveryRank = delivery === 'listed' ? 0 : delivery === 'unknown' ? 1 : 2
+  return hoursRank + deliveryRank
+}
+
 export function getDietTag(tags: Record<string, string>, need: string): boolean {
   const key = need.toLowerCase().replace('-', '_')
   return tags[`diet:${key}`]?.toLowerCase() === 'yes'

@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "menu:dev": "wrangler dev --config worker/wrangler.toml --ip 127.0.0.1 --port 8787",
+    "menu:deploy": "wrangler deploy --config worker/wrangler.toml",
     "test": "vitest run"
   },
   "dependencies": {
@@ -26,7 +28,8 @@
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "wrangler": "^4.149.0"
   },
   "overrides": {
     "@grpc/grpc-js": "^1.14.6"

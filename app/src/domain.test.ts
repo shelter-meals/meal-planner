@@ -9,7 +9,7 @@ import {
   totalPeople,
   type MealGroup,
 } from './domain'
-import { getHoursState, isGroceryStore } from './services/openMap'
+import { getAvailabilityRank, getHoursState, isGroceryStore } from './services/openMap'
 
 describe('meal group calculations', () => {
   it('generates distinct IDs for meal groups and local demo plans', () => {
@@ -76,5 +76,13 @@ describe('San Francisco meal times', () => {
   it('labels mapped business hours as unknown when they are missing or invalid', () => {
     expect(getHoursState(undefined, new Date())).toBe('unlisted')
     expect(getHoursState('not a valid opening-hours value', new Date())).toBe('unknown')
+  })
+
+  it('ranks mapped open status before delivery evidence', () => {
+    const midday = new Date('2026-10-09T12:00:00')
+    expect(getAvailabilityRank({ opening_hours: 'Mo-Su 00:00-23:59', delivery: 'yes' }, midday)).toBe(0)
+    expect(getAvailabilityRank({ opening_hours: 'Mo-Su 00:00-23:59', delivery: 'no' }, midday)).toBe(2)
+    expect(getAvailabilityRank({ delivery: 'yes' }, midday)).toBe(10)
+    expect(getAvailabilityRank({ opening_hours: 'Mo-Su 00:00-00:01', delivery: 'yes' }, midday)).toBe(20)
   })
 })
