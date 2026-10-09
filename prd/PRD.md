@@ -107,6 +107,7 @@ The current app is a personal prototype of the intake, nearby-listing, and groce
 
 - Nearby candidates come from user-triggered OpenStreetMap searches. Mapped hours and delivery tags are unverified; current menus, delivery availability, inventory, prices, and allergy safety are not available from this source.
 - Nearby listings show eight options at a time, with a control to reveal more. Fuel stations and alcohol retailers are excluded from grocery results based on their map tags.
+- Google Maps scraping is not a menu-data plan. Google Places provides place details and some food-related attributes, not a complete itemized menu. The next menu-data direction is a small pilot using menus authorized by participating restaurants, starting with research into Square Catalog access.
 - The app does not generate restaurant menu orders, recommend a split order across restaurants, or identify in-stock grocery products. It shows nearby candidates and an editable count of complete meal units for grocery planning instead.
 - Volunteers must verify menus, quantities, delivery, ingredients, stock, and allergy or strict-diet handling directly with providers.
 - Without Firebase configuration, the app runs in local-preview mode and stores demo plans only in that browser. Online authentication, Firestore persistence, and sharing require a configured Firebase project.
@@ -132,10 +133,12 @@ These gaps are deliberate for the free-data prototype and must not be represente
 13. **Hosting and app data:** Use Firebase Hosting, Firebase Authentication, and Cloud Firestore, subject to confirming free-tier quotas and operational fit. Keep source code in GitHub; GitHub Pages is not the production host for this prototype.
 14. **Account access:** Allow any verified email address to sign in; saved plans remain private unless explicitly shared.
 15. **Free-data MVP scope:** Use user-triggered OpenStreetMap/Nominatim/Overpass lookups for nearby listings, subject to provider policies and attribution. Treat business details and hours as unverified; never claim delivery or allergy-safe menu coverage without evidence. Since free listings do not reliably include current menus, delivery availability, or stock, do not fabricate exact restaurant orders; provide editable quantities and clearly labeled grocery meal-category checklists instead.
+16. **Menu-data direction:** Do not scrape Google Maps. Explore a small pilot of restaurant-authorized menu catalogs, beginning with Square Catalog API feasibility. A seller must authorize access; catalog items and prices still need serving-size and dietary/allergen review before they can support recommendations. Fees, backend hosting, restaurant onboarding, and data freshness remain to be confirmed.
 
 ## Deployment and later-phase decisions
 
 - Configure a Firebase project, email-link sign-in, Firestore, and authorized domains. Validate security rules and sharing flows with the Firebase Emulator Suite or an equivalent integration test before deployment; verify free-tier quotas and email delivery limits.
+- For the menu pilot, identify participating restaurants and confirm their POS/menu systems. Evaluate Square seller OAuth, the least-privilege catalog read scope, token handling, and a secure way to publish approved catalog snapshots to volunteers.
 - Keep privileged API credentials off the client. If a better data provider needs a secret key or server-side integration, reassess the free-tier constraint before selecting it.
 - Research providers and terms for current business hours, menus, delivery availability, prices, and store inventory in San Francisco before expanding recommendation claims.
 - Define an evidence and freshness threshold for any future open, delivery, menu, price, or inventory status.
