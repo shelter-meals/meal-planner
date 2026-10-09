@@ -1,0 +1,107 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function planOwner(planId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/plans/$(planId)).data.ownerUid == request.auth.uid;
+    }
+
+    function hasActiveShareClaim(planId) {
+      let claimPath = /databases/$(database)/documents/plans/$(planId)/claims/$(request.auth.uid);
+      return signedIn()
+        && exists(claimPath)
+        && exists(/databases/$(database)/documents/shareLinks/$(get(claimPath).data.tokenId))
+        && get(/databases/$(database)/documents/shareLinks/$(get(claimPath).data.tokenId)).data.planId == planId
+        && get(/databases/$(database)/documents/shareLinks/$(get(claimPath).data.tokenId)).data.active == true;
+    }
+
+    function canReadPlan(planId) {
+      let plan = resource.data;
+      let email = request.auth.token.email;
+      return signedIn()
+        && (plan.ownerUid == request.auth.uid
+          || (email != null && email in plan.sharedWith)
+          || hasActiveShareClaim(planId));
+    }
+
+    function validPlanShape(data) {
+      return data.keys().hasOnly([
+          'ownerUid',
+          'ownerEmail',
+          'title',
+          'mealTime',
+          'groups',
+          'budget',
+          'radiusMiles',
+          'sharedWith',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerUid is string
+        && data.ownerEmail is string
+        && data.title is string
+        && data.title.size() <= 100
+        && data.mealTime is string
+        && data.groups is list
+        && data.groups.size() <= 20
+        && data.sharedWith is list
+        && data.sharedWith.size() <= 50
+        && data.radiusMiles in [5, 10, 15]
+        && (data.budget == null || (data.budget is number && data.budget >= 0));
+    }
+
+    match /plans/{planId} {
+      allow get, list: if canReadPlan(planId);
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.sharedWith == []
+        && validPlanShape(request.resource.data);
+      allow update: if signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && validPlanShape(request.resource.data);
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+
+      match /claims/{uid} {
+        allow get: if signedIn()
+          && (request.auth.uid == uid || planOwner(planId));
+        allow list: if signedIn() && planOwner(planId);
+        allow create: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.uid == uid
+          && request.resource.data.keys().hasOnly(['uid', 'tokenId', 'createdAt'])
+          && exists(/databases/$(database)/documents/shareLinks/$(request.resource.data.tokenId))
+          && get(/databases/$(database)/documents/shareLinks/$(request.resource.data.tokenId)).data.planId == planId
+          && get(/databases/$(database)/documents/shareLinks/$(request.resource.data.tokenId)).data.active == true;
+        allow update: if signedIn() && planOwner(planId);
+        allow delete: if signedIn() && (request.auth.uid == uid || planOwner(planId));
+      }
+    }
+
+    match /shareLinks/{tokenId} {
+      allow get: if signedIn();
+      allow list: if signedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['planId', 'ownerUid', 'active', 'createdAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.active == true
+        && planOwner(request.resource.data.planId);
+      allow update: if signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.planId == resource.data.planId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
+        && request.resource.data.active == false;
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /{path=**}/claims/{uid} {
+      allow get, list: if signedIn() && request.auth.uid == uid;
+    }
+  }
+}
