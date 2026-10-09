@@ -12,7 +12,7 @@ npm install
 npm run dev -- --host 0.0.0.0
 ```
 
-Open the local URL printed by Vite on your computer. To test on a phone on the same Wi-Fi, open the network URL printed by Vite. Without Firebase settings, development mode is a local preview: plans stay in that browser and cannot be shared.
+Open the local URL printed by Vite on your computer. To test on a phone on the same Wi-Fi, open the network URL printed by Vite. No sign-in or Firebase app configuration is required. Plans are saved in the browser's local storage and stay in that browser profile; they do not sync to another device or browser.
 
 Run checks:
 
@@ -54,23 +54,10 @@ Set `VITE_NEARBY_API_URL` in `app/.env.local` to the deployed Worker URL ending 
 
 The Worker is a public prototype endpoint, not an authenticated API; its exact-origin CORS check is not authentication. Keep it on the Free plan (so limits stop work rather than create charges), and add real request authentication or rate limiting before broader operational use.
 
-## Configure Firebase
+## Saved plans and privacy
 
-1. Create a Firebase project and register a web app.
-2. Copy `app/.env.example` to `app/.env.local` and fill in the web app config values from Firebase Project settings.
-3. Enable **Authentication → Email/Password → Email link (passwordless sign-in)**. Add the Firebase Hosting domain to authorized domains.
-4. Create a Cloud Firestore database.
-5. From `app/`, connect the Firebase CLI to your project and deploy the Hosting site and Firestore rules/indexes:
+The app does not require sign-in. Saved plans are stored in the current browser profile's local storage. They remain available in that browser after closing and reopening it, but are not uploaded, synchronized, or shared with other devices. Anyone using the same browser profile can see them. Plans previously saved to Firestore are not imported. Clearing this site's browser storage removes locally saved plans.
 
-   ```sh
-   npm run build
-   npx firebase-tools login
-   npx firebase-tools use --add
-   npx firebase-tools deploy --only hosting,firestore:rules,firestore:indexes
-   ```
+Saved plans include meal groups, meal time, budget, and search radius, but never the shelter address, search coordinates, business listings, or menu results. Enter the address again when reopening a saved plan to run a new search.
 
-6. In Firebase Hosting, use the project's `*.web.app` URL. Authenticated users can save plans, share them with an email address, or make sign-in-required share links. Plan owners can remove email access and revoke links.
-
-Firebase web configuration values are visible to browsers by design; do not add privileged service-account credentials or private API keys to `.env.local` or client code. Firestore rules restrict access to a plan's owner, explicitly shared email addresses, and authenticated users with an active share-link claim. Saved plans contain no shelter address or search coordinates.
-
-The Firebase Emulator Suite and live deployment require the Firebase CLI and a Firebase project. Check Firebase and external data-provider quotas before public use; the data budget for this prototype is free tiers only.
+Firebase is used to host the website only. Firebase Authentication and Cloud Firestore are not needed for planner use. The Cloudflare Worker still handles nearby searches and published-menu checks as described above.

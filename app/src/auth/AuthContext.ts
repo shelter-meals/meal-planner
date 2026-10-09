@@ -6,7 +6,7 @@ export interface AuthContextValue {
   demoMode: boolean
 }
 
-export const AuthContext = createContext<AuthContextValue>({ user: null, demoMode: false })
+export const AuthContext = createContext<AuthContextValue>({ user: null, demoMode: true })
 
 export function useAuth(): AuthContextValue {
   return useContext(AuthContext)

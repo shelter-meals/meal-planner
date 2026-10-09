@@ -973,8 +973,8 @@ function Planner() {
         <div className="rail-footer">
           <div className="rail-privacy"><LockKeyhole size={15} /><span>Addresses stay out of saved plans.</span></div>
           <div className="rail-user">
-            <div className="user-avatar">{demoMode ? 'D' : user?.email?.slice(0, 1).toUpperCase()}</div>
-            <div><strong>{demoMode ? 'Local preview' : user?.email}</strong><small>{demoMode ? 'Data stays in this browser' : 'Signed in'}</small></div>
+            <div className="user-avatar">{demoMode ? 'L' : user?.email?.slice(0, 1).toUpperCase()}</div>
+            <div><strong>{demoMode ? 'This browser' : user?.email}</strong><small>{demoMode ? 'Plans stay on this device' : 'Signed in'}</small></div>
             {!demoMode && <button aria-label="Sign out" className="signout-button" onClick={() => void leaveWorkspace()} type="button">Sign out</button>}
           </div>
           {signOutError && <p className="signout-error" role="alert">{signOutError}</p>}
@@ -1018,14 +1018,14 @@ function Planner() {
             </div>
             <div className={`connection-state ${demoMode ? 'connection-demo' : ''}`}>
               <span className="connection-dot" />
-              {demoMode ? 'Local preview' : 'Private workspace'}
+              {demoMode ? 'Plans on this browser' : 'Private workspace'}
             </div>
           </div>
 
           {demoMode && (
             <div className="demo-banner" role="status">
               <ShieldCheck size={16} />
-              <span>Local preview. Add Firebase settings to enable secure online sign-in and shared plans.</span>
+              <span>Plans stay in this browser only. They do not sync, and older online plans are not imported.</span>
             </div>
           )}
 
@@ -1071,7 +1071,7 @@ function Planner() {
               <label className="setting-field budget-field" htmlFor="budget">
                 <span><span className="dollar-icon">$</span> Optional budget</span>
                 <div className="budget-input"><span>$</span><input id="budget" min="0" onChange={(event) => setBudgetText(event.target.value)} placeholder="No limit" step="0.01" type="number" value={budgetText} /><small>total</small></div>
-                <small className="budget-note">Price data is not available in this preview.</small>
+                <small className="budget-note">Price data is unavailable.</small>
               </label>
             </div>
 

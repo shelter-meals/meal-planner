@@ -1,7 +1,7 @@
 # Shelter Meal Planner — Product Requirements
 
-**Status:** Prototype implemented; Firebase setup and deployment validation pending
-**Last updated:** 2026-10-08
+**Status:** Prototype deployed; plans are saved locally in each browser profile
+**Last updated:** 2026-10-09
 
 ## Product summary
 
@@ -76,7 +76,7 @@ After a fire, volunteers may need to arrange meals at unusual hours, including o
 ### Device access
 
 - Provide a usable experience in a desktop browser and on a phone.
-- Host the app online for phone and desktop access from anywhere using Firebase Hosting. Require Firebase Authentication passwordless email sign-in via one-time link and use Cloud Firestore for saved plans and sharing. Keep application source in GitHub; do not put secrets in the client or repository.
+- Host the app online for phone and desktop access from anywhere using Firebase Hosting. Do not require sign-in. Save plans in browser-local storage so they persist within the current browser profile without syncing or sharing across devices. Keep application source in GitHub; do not put secrets in the client or repository.
 - Include provider contact and ordering links where available; the volunteer reviews and completes the transaction outside the app.
 
 ## Safety, trust, and privacy
@@ -86,19 +86,19 @@ After a fire, volunteers may need to arrange meals at unusual hours, including o
 - Never represent a business as open or deliverable without showing the basis and recency of that information.
 - Disclose that the shelter address is sent to the OpenStreetMap geocoder when searching, and that the resulting coordinates and radius pass through the Cloudflare Worker to the OpenStreetMap business-search service; do not include the address or coordinates in saved plans.
 - Collect only the incident and meal information needed to prepare a plan. Do not request names or other identifying details for meal recipients in the initial release.
-- Save plans with an explicit delete option, but never include the shelter address in the saved plan. Define access controls and review logs, backups, and provider/API handling so the address is not unintentionally retained.
-- Keep saved plans private to their owner unless the owner explicitly shares a plan with another signed-in volunteer, either by entering the volunteer's email or creating a sign-in-required share link.
+- Save plans with an explicit delete option in the current browser's local storage, but never include the shelter address in the saved plan. Explain that plans are accessible to anyone using that browser profile and are not backed up or synced.
+- Make clear that anyone using the current browser profile can access its saved plans; do not upload or sync those plans to a cloud service.
 - Present the product as a volunteer planning aid; do not imply official Red Cross endorsement or integration unless authorized.
 - Treat the first release as a personal prototype; organizational approval, approved vendors, and procurement requirements must be addressed before any official Red Cross deployment.
 
 ## Target acceptance criteria
 
-- A signed-in volunteer can enter a shelter address, meal time, total headcount, and meal groups whose counts reconcile and whose combined dietary needs are explicit.
+- A volunteer can enter a shelter address, meal time, total headcount, and meal groups whose counts reconcile and whose combined dietary needs are explicit without signing in.
 - The app returns nearby candidates with clear open/delivery status and visible uncertainty.
 - A recommended order or shopping list itemizes quantities and serving assumptions and maps items to the needs they are intended to cover.
 - If no single provider covers the group, the app explicitly identifies the unmet needs and offers an alternative where data permits.
 - Allergy and strict-diet suitability is never presented as guaranteed without provider confirmation.
-- Saved plans can be deleted and do not contain the shelter address; plans are private unless explicitly shared by email or a link requiring sign-in.
+- Saved plans persist in the current browser profile, can be deleted, and do not contain the shelter address. They do not sync or share across devices.
 - The flow is usable on a phone-sized screen as well as a desktop browser.
 
 ## Prototype status and known gaps
@@ -114,8 +114,8 @@ The current app is a personal prototype of the intake, nearby-listing, and groce
 - Google Places may provide business identity, location, business status, hours, and website/Maps links, but its documented place fields are not a full itemized menu. Combining Places results with OpenStreetMap or third-party menu records requires careful matching, Google's attribution/display rules, and a terms review. Do not treat a name-only match as confirmation that a menu belongs to a specific nearby location.
 - The app does not generate restaurant menu orders, recommend a split order across restaurants, or identify in-stock grocery products. It shows nearby candidates and an editable count of complete meal units for grocery planning instead.
 - Volunteers must verify menus, quantities, delivery, ingredients, stock, and allergy or strict-diet handling directly with providers.
-- Without Firebase configuration, the app runs in local-preview mode and stores demo plans only in that browser. Online authentication, Firestore persistence, and sharing require a configured Firebase project.
-- Firestore rules and sharing flows still need emulator or equivalent integration testing before deployment.
+- Saved plans are stored in browser-local storage and are available to anyone using the same browser profile. They are not backed up or synchronized.
+- Plans saved to the former signed-in Firestore workflow are not automatically copied into browser-local storage.
 - The layout has been checked at a phone-sized viewport; broader device/browser and accessibility testing remains.
 
 These gaps are deliberate for the free-data prototype and must not be represented as satisfied acceptance criteria.
@@ -123,19 +123,19 @@ These gaps are deliberate for the free-data prototype and must not be represente
 ## Confirmed product decisions
 
 1. **Launch geography:** San Francisco, California.
-2. **Access and stack:** Responsive web app on Firebase Hosting (`*.web.app`), with Firebase Authentication passwordless email sign-in for any verified email address and Cloud Firestore for saved plans/sharing. GitHub hosts the source repository.
+2. **Access and stack:** Responsive web app on Firebase Hosting (`*.web.app`) with no sign-in. Saved plans stay in local browser storage and are not shared or synced. GitHub hosts the source repository.
 3. **Ordering boundary:** Provide provider contact and ordering links where available; volunteers confirm and purchase outside the app. No automatic checkout.
 4. **Meal groups:** Count people in groups with combined requirements to avoid double-counting overlapping needs. Initial diet options: vegetarian, vegan, gluten-free, dairy-free, halal, kosher, and pork-free. Initial allergy options: peanuts, tree nuts, milk, eggs, wheat, soy, sesame, fish, and shellfish. Support notes for other needs and distinguish allergies/strict requirements from preferences.
 5. **Fallback:** When no single restaurant covers the group, offer both a split plan of up to two restaurants and a grocery/specialty-store fallback when data permits.
 6. **Meal and budget:** Budget is optional (per person or total). Start with one complete meal per person and allow quantity adjustments, including for children or other portion needs.
-7. **Persistence and sharing:** Save plans with explicit deletion, but never include the shelter address in a saved plan. Plans are private by default and may be shared by email or a link that requires sign-in.
+7. **Persistence:** Save plans in the current browser's local storage with explicit deletion, but never include the shelter address in a saved plan. Plans persist across browser restarts in that browser profile and do not sync or share.
 8. **Prototype scope:** Personal prototype first, not an official Red Cross product or integration. Before organizational deployment, confirm authorization, approved vendors, procurement rules, and applicable data-handling requirements.
 9. **Location privacy:** Disclose that the address is sent to external location/business-search services for live searches.
 10. **Data-service budget:** Use free tiers only for the prototype; avoid paid services.
 11. **Search area:** Start with a 5-mile radius from the shelter and allow volunteers to expand it.
-12. **Authentication:** Use email-based passwordless sign-in via one-time link, not Google sign-in.
-13. **Hosting and app data:** Use Firebase Hosting, Firebase Authentication, and Cloud Firestore, subject to confirming free-tier quotas and operational fit. Keep source code in GitHub; GitHub Pages is not the production host for this prototype.
-14. **Account access:** Allow any verified email address to sign in; saved plans remain private unless explicitly shared.
+12. **Authentication:** Do not require an account or sign-in for the prototype.
+13. **Hosting and app data:** Use Firebase Hosting for the website. Keep saved plans in local browser storage rather than Firebase Authentication or Cloud Firestore. Keep source code in GitHub; GitHub Pages is not the production host for this prototype.
+14. **Local access:** Plans are available to anyone using the same browser profile and are not shared across devices.
 15. **Free-data MVP scope:** Use user-triggered OpenStreetMap/Nominatim/Overpass lookups for nearby listings, subject to provider policies and attribution. Treat business details and hours as unverified; never claim delivery or allergy-safe menu coverage without evidence. Since free listings do not reliably include current menus, delivery availability, or stock, do not fabricate exact restaurant orders; provide editable quantities and clearly labeled grocery meal-category checklists instead.
 16. **Menu-data direction:** Do not scrape Google Maps. Spoonacular has some chain menu-item coverage, but its search can return unrelated items/restaurants, lacks dependable location matching, and the tested details lacked prices and ingredient lists. Google Places can supplement business details but is not a full menu feed. The prototype checks up to five top-ranked OpenStreetMap listings' mapped website URLs with a separately deployed Cloudflare Worker. It respects the listed site's `robots.txt`, stays on HTTPS and the same host (including its `www` equivalent), and reads a homepage plus up to three bounded same-site menu pages. It extracts published Schema.org `MenuItem` data and heuristically identifies likely item names, descriptions, and prices in visible HTML text; it does not read hidden app data, parse PDFs, or follow third-party ordering links. Visible-text matches are unverified and may be incomplete, so the interface identifies them and links to the source for confirmation. Menu results are transient and are not saved. Draft one-item-per-person quantities are offered only for likely main-course items; dietary suitability requires an explicit published label for every selected diet. Missing data is never treated as a match, and allergy/cross-contact safety always requires direct provider confirmation. Quantity and item selection remain editable, with assumptions shown. The Worker receives only OpenStreetMap listing IDs and mapped website URLs, not business names, shelter addresses, or group needs. Keep it on Cloudflare Workers Free with billing disabled; quota exhaustion must stop menu checks without enabling paid usage. This constrained public-menu scan is a discovery aid, not a replacement for confirming vendor authorization, menu currency, serving size, ingredients, procurement requirements, or delivery with the provider.
 
@@ -143,7 +143,7 @@ These gaps are deliberate for the free-data prototype and must not be represente
 
 - Deploy the menu Worker separately from Firebase Hosting. Configure its exact allowed app origin and `VITE_MENU_API_URL`; do not enable Cloudflare billing, upgrade from Workers Free, or add a storage binding. The Worker has strict per-request site/page/size/time limits and returns `Cache-Control: no-store`. It is currently an unauthenticated public prototype endpoint; CORS is not authentication, so add authentication or effective rate limiting before broader operational use.
 - The Worker fetches only mapped website URLs, but OpenStreetMap does not guarantee those URLs are official or current. Before production use, review the target sites' terms as well as `robots.txt`; the app does not claim that robots permission alone grants reuse rights.
-- Configure a Firebase project, email-link sign-in, Firestore, and authorized domains. Validate security rules and sharing flows with the Firebase Emulator Suite or an equivalent integration test before deployment; verify free-tier quotas and email delivery limits.
+- Firebase is used for static hosting only. Authentication and Firestore are not required by the app's local-only plan workflow.
 - For the menu pilot, identify participating restaurants and confirm their POS/menu systems. Evaluate Square seller OAuth, the least-privilege catalog read scope, token handling, and a secure way to publish approved catalog snapshots to volunteers.
 - Before any Spoonacular integration, get written clarification on whether its one-hour caching allowance applies to this user-facing menu-planning use case; prevent menu API results from being saved with plans.
 - Before using Places API results alongside other map or menu sources, review current Google Maps Platform terms, required Google branding/attribution, permitted display context, and non-Google map restrictions; set strict usage caps that cannot incur charges.
