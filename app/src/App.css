@@ -1414,6 +1414,7 @@
 .menu-status-robots_unavailable,
 .menu-status-site_unreachable,
 .menu-status-unsupported_site,
+.menu-status-page_too_large,
 .menu-status-blocked_redirect,
 .menu-status-error {
   color: #79581b;

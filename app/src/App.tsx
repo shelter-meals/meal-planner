@@ -274,6 +274,11 @@ function PlaceRow({
               {menuResult ? (
                 <>
                   <p className={`menu-evidence__status menu-status-${menuResult.status}`}>{menuResult.message}</p>
+                  {menuResult.status !== 'menu_found' && menuUrl && (
+                    <a className="menu-source" href={menuUrl} rel="noreferrer" target="_blank">
+                      Open restaurant website <ExternalLink size={13} />
+                    </a>
+                  )}
                   {menuResult.status === 'menu_found' && (
                     <>
                       {menuUrl && (
@@ -353,7 +358,7 @@ function PlaceRow({
                         </div>
                       )}
                       <details className="published-menu-items">
-                        <summary>See {menuResult.items.length} published menu item{menuResult.items.length === 1 ? '' : 's'}</summary>
+                        <summary>See {menuResult.items.length} menu item{menuResult.items.length === 1 ? '' : 's'} found</summary>
                         <ul>
                           {menuResult.items.map((item) => (
                             <li key={item.id}>
@@ -361,6 +366,7 @@ function PlaceRow({
                               {item.section && <span> · {item.section}</span>}
                               {item.price !== null && <span> · {formatPublishedPrice(item.price, item.currency)}</span>}
                               {item.description && <p>{item.description}</p>}
+                              {item.sourceType === 'visible_text' && <small>Read from visible menu text; confirm details with the restaurant.</small>}
                               {item.suitableForDiet.length > 0 && (
                                 <small>Website labels: {item.suitableForDiet.join(', ')}</small>
                               )}

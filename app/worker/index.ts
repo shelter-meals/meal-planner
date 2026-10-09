@@ -25,13 +25,14 @@ export interface RobotsGroup {
 
 const MAX_CANDIDATES = 5
 const MAX_REQUEST_BYTES = 24_000
-const MAX_PAGE_BYTES = 250_000
+const MAX_PAGE_BYTES = 1_000_000
 const MAX_ROBOTS_BYTES = 50_000
 const MAX_FETCH_MS = 4_000
+const MAX_MENU_LINKS = 3
 const MAX_OVERPASS_BYTES = 3_000_000
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
 const USER_AGENT = 'ShelterMealPlanner'
-const SCAN_MESSAGE = 'No itemized menu data could be read from this site.'
+const SCAN_MESSAGE = 'No menu items were visible in the website pages this scan could read. The menu may be in a PDF, an interactive viewer, or a separate ordering service. Open the business website or call to choose dishes.'
 
 interface NearbySearchRequest {
   lat: number
@@ -167,7 +168,10 @@ function jsonResponse(
 async function readTextLimited(response: Response | Request, maximumBytes: number): Promise<string> {
   const reportedLength = Number(response.headers.get('content-length'))
   if (Number.isFinite(reportedLength) && reportedLength > maximumBytes) {
-    throw new ScanFailure('unsupported_site', 'The page exceeded the menu scan size limit.')
+    throw new ScanFailure(
+      'page_too_large',
+      'This restaurant page is larger than the automatic menu scan can read. Open the website or call to check the menu.',
+    )
   }
   if (!response.body) return ''
   const reader = response.body.getReader()
@@ -180,7 +184,10 @@ async function readTextLimited(response: Response | Request, maximumBytes: numbe
     bytesRead += value.byteLength
     if (bytesRead > maximumBytes) {
       await reader.cancel()
-      throw new ScanFailure('unsupported_site', 'The page exceeded the menu scan size limit.')
+      throw new ScanFailure(
+        'page_too_large',
+        'This restaurant page is larger than the automatic menu scan can read. Open the website or call to check the menu.',
+      )
     }
     parts.push(decoder.decode(value, { stream: true }))
   }
@@ -227,10 +234,16 @@ async function getRobotsRules(origin: string, cache: Map<string, Promise<RobotsG
 
 async function checkRobots(url: URL, cache: Map<string, Promise<RobotsGroup[] | null>>) {
   const rules = await getRobotsRules(url.origin, cache)
-  if (!rules) throw new ScanFailure('robots_unavailable', 'The site menu-check permission could not be confirmed.')
+  if (!rules) throw new ScanFailure(
+    'robots_unavailable',
+    'The restaurant website did not provide its access policy, so we could not read its menu automatically. Open the official website or call to check the menu.',
+  )
   const path = `${url.pathname}${url.search}`
   if (!robotsAllows(rules, path)) {
-    throw new ScanFailure('robots_disallowed', 'This site does not allow the menu check.')
+    throw new ScanFailure(
+      'robots_disallowed',
+      'The restaurant website asks automated tools not to read this page. Open the official website or call to check its menu.',
+    )
   }
 }
 
@@ -306,17 +319,18 @@ async function scanCandidate(
         items: homeResult.items,
       }
     }
-    const menuLinks = findMenuLinks(home.html, home.url, 1)
+    const homeTextResult = parseMenuHtml(home.html, { includeVisibleText: true })
+    const menuLinks = findMenuLinks(home.html, home.url, MAX_MENU_LINKS)
     let menuLinkBlockedByRobots = false
+    let menuItems: MenuDiscoveryResult['items'] = homeTextResult.items
+    let firstMenuUrl: URL | null = null
     for (const menuLink of menuLinks) {
       try {
         const page = await fetchMenuPage(menuLink, website.hostname.toLowerCase(), robotsCache)
-        const parsed = parseMenuHtml(page.html)
+        const parsed = parseMenuHtml(page.html, { includeVisibleText: true })
         if (parsed.items.length) {
-          return {
-            ...empty('menu_found', 'Published structured menu data was found on the linked website.', page.url.toString()),
-            items: parsed.items,
-          }
+          firstMenuUrl ??= page.url
+          menuItems.push(...parsed.items)
         }
       } catch (error) {
         if (error instanceof ScanFailure && error.status === 'robots_disallowed') {
@@ -326,10 +340,39 @@ async function scanCandidate(
         throw error
       }
     }
-    if (menuLinkBlockedByRobots) {
-      return empty('robots_disallowed', 'This site does not allow the menu check.', home.url.toString())
+    if (menuItems.length) {
+      const visibleTextCount = menuItems.filter((item) => item.sourceType === 'visible_text').length
+      const seenItems = new Set<string>()
+      menuItems = menuItems
+        .filter((item) => {
+          const key = `${item.section.toLowerCase()}\u0000${item.name.toLowerCase()}`
+          if (seenItems.has(key)) return false
+          seenItems.add(key)
+          return true
+        })
+        .slice(0, 100)
+        .map((item, index) => ({ ...item, id: `menu-item-${index + 1}` }))
+      return {
+        ...empty(
+          'menu_found',
+          `Found ${menuItems.length} menu item${menuItems.length === 1 ? '' : 's'} on the restaurant website${visibleTextCount ? ' by reading visible menu text' : ''}. Confirm today's availability, prices, portions, and dietary details with the business.`,
+          firstMenuUrl?.toString() ?? home.url.toString(),
+        ),
+        items: menuItems,
+      }
     }
-    return empty('no_menu_data', SCAN_MESSAGE, home.url.toString())
+    if (menuLinkBlockedByRobots) {
+      return empty(
+        'robots_disallowed',
+        'The restaurant website asks automated tools not to read its menu. Open the official website or call to choose items.',
+        home.url.toString(),
+      )
+    }
+    return empty(
+      'no_menu_data',
+      SCAN_MESSAGE,
+      home.url.toString(),
+    )
   } catch (error) {
     if (error instanceof ScanFailure) return empty(error.status, error.message)
     return empty('site_unreachable', 'The business website could not be checked.')

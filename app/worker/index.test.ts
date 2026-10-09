@@ -134,6 +134,30 @@ describe('menu website safety checks', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
+  it('explains when a website exceeds the bounded page size and returns its website link', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/robots.txt')) {
+        return new Response('User-agent: *\nAllow: /', { headers: { 'Content-Type': 'text/plain' } })
+      }
+      return new Response('<html></html>', {
+        headers: { 'Content-Type': 'text/html', 'Content-Length': '1000001' },
+      })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(menuRequest([
+      { id: 'place-1', website: 'https://restaurant.example/' },
+    ]), environment)
+    const body = await response.json() as {
+      results: Array<{ status: string; menuUrl: string; message: string }>
+    }
+    expect(body.results[0]).toMatchObject({
+      status: 'page_too_large',
+      menuUrl: 'https://restaurant.example/',
+      message: expect.stringContaining('Open the website or call'),
+    })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
   it('does not follow redirects away from the mapped business website', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/robots.txt')) {
@@ -184,6 +208,79 @@ describe('menu website safety checks', () => {
       items: [{ name: 'Garden Sandwich', section: 'Sandwiches' }],
     })
     expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads visible items and prices from linked menu pages on the same site', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/robots.txt')) {
+        return new Response('User-agent: *\nAllow: /', { headers: { 'Content-Type': 'text/plain' } })
+      }
+      if (url.endsWith('/')) {
+        return new Response('<a href="/menu">Food menu</a><a href="/lunch-menu">Lunch menu</a>', {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        })
+      }
+      if (url.endsWith('/lunch-menu')) {
+        return new Response(`
+          <main><h1>Lunch menu</h1><h2>Sandwiches</h2>
+            <h3>Chicken sandwich</h3>
+            <p>Grilled chicken with greens and tomato.</p><span>$11</span>
+          </main>`, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+      }
+      return new Response(`
+        <main><h1>Menu</h1><h2>Bowls</h2>
+          <h3>Roasted vegetable bowl</h3>
+          <p>Brown rice, seasonal vegetables, and tahini.</p><span>$13.25</span>
+          <h2>Desserts</h2><h3>Fruit cup</h3><span>$4</span>
+        </main>`, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(menuRequest([
+      { id: 'place-1', website: 'https://restaurant.example/' },
+    ]), environment)
+    const body = await response.json() as {
+      results: Array<{
+        status: string
+        menuUrl: string
+        message: string
+        items: Array<{ name: string; price: number | null; sourceType: string }>
+      }>
+    }
+    expect(body.results[0]).toMatchObject({
+      status: 'menu_found',
+      menuUrl: 'https://restaurant.example/menu',
+      message: expect.stringContaining('visible menu text'),
+      items: [
+        { name: 'Roasted vegetable bowl', price: 13.25, sourceType: 'visible_text' },
+        { name: 'Fruit cup', price: 4, sourceType: 'visible_text' },
+        { name: 'Chicken sandwich', price: 11, sourceType: 'visible_text' },
+      ],
+    })
+    expect(fetch).toHaveBeenCalledTimes(4)
+  })
+
+  it('explains how to proceed when menu text is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/robots.txt')) {
+        return new Response('User-agent: *\nAllow: /', { headers: { 'Content-Type': 'text/plain' } })
+      }
+      return new Response('<main><h1>Welcome</h1><p>Contact us to learn more.</p></main>', {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      })
+    }))
+    const response = await handleMenuDiscovery(menuRequest([
+      { id: 'place-1', website: 'https://restaurant.example/' },
+    ]), environment)
+    const body = await response.json() as {
+      results: Array<{ status: string; message: string; menuUrl: string }>
+    }
+    expect(body.results[0]).toMatchObject({
+      status: 'no_menu_data',
+      menuUrl: 'https://restaurant.example/',
+      message: expect.stringContaining('The menu may be in a PDF'),
+    })
+    expect(body.results[0].message).toContain('Open the business website or call')
   })
 
   it('limits scans to five listings per request', async () => {

@@ -13,6 +13,7 @@ const MENU_STATUSES = new Set<MenuScanStatus>([
   'robots_unavailable',
   'site_unreachable',
   'unsupported_site',
+  'page_too_large',
   'blocked_redirect',
 ])
 
@@ -26,6 +27,7 @@ function parseMenuItem(value: unknown): PublishedMenuItem | null {
   if (!isRecord(value)) return null
   if (typeof value.id !== 'string' || typeof value.name !== 'string'
     || typeof value.description !== 'string' || typeof value.section !== 'string'
+    || (value.sourceType !== 'structured' && value.sourceType !== 'visible_text')
     || !Array.isArray(value.suitableForDiet)
     || !value.suitableForDiet.every((label) => typeof label === 'string')
     || (value.price !== null && (typeof value.price !== 'number' || !Number.isFinite(value.price)))
@@ -38,6 +40,7 @@ function parseMenuItem(value: unknown): PublishedMenuItem | null {
     suitableForDiet: value.suitableForDiet,
     price: value.price,
     currency: value.currency,
+    sourceType: value.sourceType,
   }
 }
 

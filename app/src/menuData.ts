@@ -8,6 +8,7 @@ export interface PublishedMenuItem {
   suitableForDiet: string[]
   price: number | null
   currency: string | null
+  sourceType: 'structured' | 'visible_text'
 }
 
 export type MenuScanStatus =
@@ -18,6 +19,7 @@ export type MenuScanStatus =
   | 'robots_unavailable'
   | 'site_unreachable'
   | 'unsupported_site'
+  | 'page_too_large'
   | 'blocked_redirect'
 
 export interface MenuDiscoveryResult {
@@ -109,6 +111,7 @@ function menuItemFromObject(value: JsonObject, section: string, index: number): 
     suitableForDiet: asTextList(value.suitableForDiet).slice(0, 12),
     price: offers.price,
     currency: offers.currency,
+    sourceType: 'structured',
   }
 }
 
@@ -139,7 +142,136 @@ function collectMenuItems(
   }
 }
 
-export function parseMenuHtml(html: string): { items: PublishedMenuItem[]; malformedJsonLd: boolean } {
+function decodeAttribute(value: string): string {
+  return value
+    .replace(/&amp;/gi, '&')
+    .replace(/&#x2f;/gi, '/')
+    .replace(/&#47;/gi, '/')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&euro;/gi, '€')
+    .replace(/&pound;/gi, '£')
+    .replace(/&dollar;/gi, '$')
+    .replace(/&#(\d+);/g, (_, value: string) => String.fromCodePoint(Number(value)))
+    .replace(/&#x([\da-f]+);/gi, (_, value: string) => String.fromCodePoint(Number.parseInt(value, 16)))
+}
+
+function visibleText(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(script|style|noscript|svg|template|nav|header|footer|button|form|iframe|select|textarea)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<(?:script|style|noscript|svg|template|nav|header|footer|button|form|iframe|select|textarea)\b[^>]*\/?>/gi, ' ')
+    .replace(/<h[1-2]\b[^>]*>/gi, '\n__SECTION__')
+    .replace(/<\/h[1-6]\s*>/gi, '\n')
+    .replace(/<br\b[^>]*>/gi, '\n')
+    .replace(/<\/(?:p|div|li|tr|td|th|article|section|main|ul|ol|dl|dt|dd)\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .split(/\r?\n/)
+    .map((line) => decodeAttribute(line.replace(/\s+/g, ' ')).trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+const NON_MENU_LINE = /\b(home|contact|locations?|careers?|about us|privacy|terms|sign in|log in|cart|checkout|order now|order online|food menu|gift cards?|giftcard|gifting|buy now|shop now|book a table|make a reservation|join now|explore|loading done|whoa there|skip to content|accessibility|follow us)\b/i
+const SECTION_LINE = /^(?:our\s+)?(?:menu|appetizers?|starters?|entrees?|entrées?|mains?|sides?|salads?|soups?|sandwiches?|subs?|wraps?|jacket potatoes|burgers?|pizzas?|pasta|noodles?|bowls?|tacos?|desserts?|drinks?|beverages?|breakfast|lunch|dinner|kids(?:'|’)? menu|shareables?|small plates?)$/i
+const MAIN_MENU_SECTION = /^(?:entrees?|entrées?|mains?|salads?|soups?|sandwiches?|subs?|wraps?|burgers?|pizzas?|pasta|noodles?|bowls?|tacos?|breakfast|lunch|dinner|shareables?|small plates?)$/i
+const EXCLUDED_SECTION = /\b(drinks?|beverages?|desserts?|sides?|sauces?|appetizers?|starters?|snacks?|add[- ]?ons?)\b/i
+const PRICE_AT_END = /(?:^|\s)([$€£]\s?\d{1,4}(?:\.\d{1,2})?|\d{1,4}\.\d{2}\s?(?:USD|CAD|EUR|GBP))\s*$/i
+
+function isMenuNameLine(line: string): boolean {
+  return line.length >= 3
+    && line.length <= 100
+    && !NON_MENU_LINE.test(line)
+    && !/[.!?]\s*$/.test(line)
+    && !/^[$€£\d]/.test(line)
+    && !/^(?:\/|https?:\/\/|www\.)/i.test(line)
+    && !/^(?:view|read|learn|click|see|follow|visit|call|email|copyright|all rights reserved)\b/i.test(line)
+  }
+
+function visibleTextMenuItems(html: string): PublishedMenuItem[] {
+  const lines = visibleText(html).split('\n')
+  const entries: PublishedMenuItem[] = []
+  let section = ''
+  let previousName = ''
+  const seen = new Set<string>()
+
+  for (const rawLine of lines) {
+    const isSection = rawLine.startsWith('__SECTION__')
+    const line = (isSection ? rawLine.slice('__SECTION__'.length) : rawLine).trim()
+    if (!line) continue
+    if (isSection || SECTION_LINE.test(line) && !PRICE_AT_END.test(line)) {
+      section = line.slice(0, 100)
+      previousName = ''
+      continue
+    }
+
+    const standalonePrice = /^([$€£]\s?\d{1,4}(?:\.\d{1,2})?|\d{1,4}\.\d{2}\s?(?:USD|CAD|EUR|GBP))$/i.exec(line)
+    if (standalonePrice && previousName) {
+      const priceText = standalonePrice[1].replace(/[^\d.]/g, '')
+      const price = Number(priceText)
+      const previous = entries[entries.length - 1]
+      if (previous?.name === previousName) {
+        previous.price = Number.isFinite(price) ? price : null
+        previous.currency = standalonePrice[1].includes('$') ? 'USD'
+          : standalonePrice[1].includes('€') ? 'EUR'
+            : standalonePrice[1].includes('£') ? 'GBP'
+              : /USD/i.test(standalonePrice[1]) ? 'USD'
+                : /CAD/i.test(standalonePrice[1]) ? 'CAD'
+                  : /EUR/i.test(standalonePrice[1]) ? 'EUR'
+                    : /GBP/i.test(standalonePrice[1]) ? 'GBP' : null
+      }
+      previousName = ''
+      continue
+    }
+
+    const itemWithPrice = line.match(/^(.*?)\s+([$€£]\s?\d{1,4}(?:\.\d{1,2})?|\d{1,4}\.\d{2}\s?(?:USD|CAD|EUR|GBP))$/i)
+    const name = (itemWithPrice?.[1] ?? line).trim()
+    if (isMenuNameLine(name) && (itemWithPrice || !/[,:;]\s/.test(name))) {
+      const key = `${section.toLowerCase()}\u0000${name.toLowerCase()}`
+      if (seen.has(key)) {
+        previousName = ''
+        continue
+      }
+      seen.add(key)
+      const rawPrice = itemWithPrice?.[2]
+      entries.push({
+        id: `menu-item-${entries.length + 1}`,
+        name: name.slice(0, 160),
+        description: '',
+        section,
+        suitableForDiet: [],
+        price: rawPrice ? Number(rawPrice.replace(/[^\d.]/g, '')) : null,
+        currency: rawPrice?.includes('$') ? 'USD'
+          : rawPrice?.includes('€') ? 'EUR'
+            : rawPrice?.includes('£') ? 'GBP'
+              : /USD/i.test(rawPrice ?? '') ? 'USD'
+                : /CAD/i.test(rawPrice ?? '') ? 'CAD'
+                  : /EUR/i.test(rawPrice ?? '') ? 'EUR'
+                    : /GBP/i.test(rawPrice ?? '') ? 'GBP' : null,
+        sourceType: 'visible_text',
+      })
+      previousName = name
+    } else if (previousName && line.length <= 240 && /[.!?]/.test(line)) {
+      const previous = entries[entries.length - 1]
+      if (previous?.name === previousName) previous.description = line.slice(0, 320)
+    } else {
+      previousName = ''
+    }
+  }
+  return entries
+    .filter((item) => item.price !== null
+      || item.description.length > 0
+      || MAIN_MENU_SECTION.test(item.section))
+    .slice(0, 100)
+}
+
+export function parseMenuHtml(
+  html: string,
+  options: { includeVisibleText?: boolean } = {},
+): { items: PublishedMenuItem[]; malformedJsonLd: boolean } {
   const items: PublishedMenuItem[] = []
   const seen = new Set<string>()
   const scripts = html.matchAll(
@@ -155,22 +287,19 @@ export function parseMenuHtml(html: string): { items: PublishedMenuItem[]; malfo
       malformedJsonLd = true
     }
   }
+  if (items.length) {
+    return {
+      items: items.slice(0, 100).map((item, index) => ({ ...item, id: `menu-item-${index + 1}` })),
+      malformedJsonLd,
+    }
+  }
   return {
-    items: items.slice(0, 100).map((item, index) => ({ ...item, id: `menu-item-${index + 1}` })),
+    items: options.includeVisibleText ? visibleTextMenuItems(html) : [],
     malformedJsonLd,
   }
 }
 
-function decodeAttribute(value: string): string {
-  return value
-    .replace(/&amp;/gi, '&')
-    .replace(/&#x2f;/gi, '/')
-    .replace(/&#47;/gi, '/')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-}
-
-export function findMenuLinks(html: string, sourceUrl: URL, limit = 2): URL[] {
+export function findMenuLinks(html: string, sourceUrl: URL, limit = 3): URL[] {
   const links: URL[] = []
   const seen = new Set<string>()
   const anchors = html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi)
@@ -217,7 +346,8 @@ export function itemHasPublishedDietEvidence(item: PublishedMenuItem, need: Diet
 
 function isLikelyMain(item: PublishedMenuItem): boolean {
   const label = `${item.section} ${item.name}`.toLowerCase()
-  if (/\b(drink|beverage|dessert|side|sauce|appetizer|starter|snack|add[- ]?on)\b/.test(label)) return false
+  if (EXCLUDED_SECTION.test(label)) return false
+  if (item.sourceType === 'visible_text') return true
   return /\b(entrees?|entrées?|mains?|meals?|bowls?|sandwiches?|burgers?|wraps?|pizzas?|plates?|curries?|pastas?|rice|noodles?|tacos?|burritos?|platters?|ramen|salad|soup|bento)\b/.test(label)
 }
 

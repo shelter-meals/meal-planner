@@ -52,12 +52,76 @@ describe('published menu extraction', () => {
       .toEqual({ items: [], malformedJsonLd: true })
   })
 
+  it('reads visible menu names, descriptions, and prices without treating navigation as food', () => {
+    const html = `
+      <nav><a href="/menu">Menu</a><a href="/contact">Contact</a><a href="/giftcard">Order Now</a></nav>
+      <main>
+        <h1>Our menu</h1>
+        <h2>Sandwiches</h2>
+        <h3>Roasted veggie sandwich</h3>
+        <p>Roasted seasonal vegetables, feta, and pesto.</p><span>$12.50</span>
+        <h3>Chicken sandwich</h3>
+        <p>Grilled chicken with greens and tomato.</p><span>$14</span>
+        <h2>Sides</h2><h3>Fries</h3><span>$5</span>
+        <h2>Desserts</h2><h3>Chocolate cookie</h3><span>$3</span>
+        <h2>Drinks</h2><h3>Iced tea</h3><span>$2</span>
+        <h3>Get Gifting</h3><h3>Order Now</h3>
+        <a href="/route">/en-gb/menu/category/436</a>
+      </main>`
+    const result = parseMenuHtml(html, { includeVisibleText: true })
+    expect(result.items).toMatchObject([
+      {
+        name: 'Roasted veggie sandwich',
+        section: 'Sandwiches',
+        description: 'Roasted seasonal vegetables, feta, and pesto.',
+        price: 12.5,
+        currency: 'USD',
+        sourceType: 'visible_text',
+      },
+      {
+        name: 'Chicken sandwich',
+        section: 'Sandwiches',
+        description: 'Grilled chicken with greens and tomato.',
+        price: 14,
+        currency: 'USD',
+      },
+      { name: 'Fries', section: 'Sides', price: 5 },
+      { name: 'Chocolate cookie', section: 'Desserts', price: 3 },
+      { name: 'Iced tea', section: 'Drinks', price: 2 },
+    ])
+    expect(result.items.some((item) => item.name === 'Contact')).toBe(false)
+    expect(result.items.some((item) => item.name === 'Menu')).toBe(false)
+    expect(result.items.some((item) => /gifting|order now|category\/\d+/i.test(item.name))).toBe(false)
+  })
+
   it('finds same-site menu links but excludes external menu hosts', () => {
     const links = findMenuLinks(
-      '<a href="/menu">Menu</a><a href="https://orders.example.net/menu">Order menu</a>',
+      '<a href="/menu">Menu</a><a href="/ordering">Order Now</a><a href="https://orders.example.net/menu">Order menu</a>',
       new URL('https://restaurant.example/'),
     )
     expect(links.map((link) => link.href)).toEqual(['https://restaurant.example/menu'])
+  })
+
+  it('requires some menu evidence before treating unpriced page headings as dishes', () => {
+    const result = parseMenuHtml(`
+      <main>
+        <h2>Sandwiches</h2><h3>Turkey club</h3>
+        <h2>Drinks</h2><h3>Loading done</h3>
+        <h2>Whoa there!</h2><h3>Check connection</h3>
+      </main>`, { includeVisibleText: true })
+    expect(result.items.map((item) => item.name)).toEqual(['Turkey club'])
+  })
+
+  it('keeps inline prices attached to their own item after an unpriced item', () => {
+    const result = parseMenuHtml(`
+      <main><h2>Sandwiches</h2>
+        <h3>Garden sandwich</h3>
+        <h3>Chicken sandwich $14.00</h3>
+      </main>`, { includeVisibleText: true })
+    expect(result.items).toMatchObject([
+      { name: 'Garden sandwich', price: null },
+      { name: 'Chicken sandwich', price: 14, currency: 'USD' },
+    ])
   })
 })
 
