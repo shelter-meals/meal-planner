@@ -4,6 +4,7 @@ import {
   createMealGroup,
   createScheduleDate,
   createUniqueId,
+  defaultMealTime,
   isValidMealPlan,
   toSanFranciscoDateTimeInput,
   totalPeople,
@@ -52,6 +53,10 @@ describe('meal group calculations', () => {
 describe('San Francisco meal times', () => {
   it('formats a time in the San Francisco timezone', () => {
     expect(toSanFranciscoDateTimeInput(new Date('2026-10-09T05:00:00.000Z'))).toBe('2026-10-08T22:00')
+  })
+
+  it('defaults meal time to two hours after now in San Francisco time', () => {
+    expect(defaultMealTime(new Date('2026-10-09T05:00:00.000Z'))).toBe('2026-10-09T00:00')
   })
 
   describe('nearby grocery listings', () => {

@@ -29,8 +29,8 @@ export interface PlaceSearchResult {
 }
 
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search'
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
-const METERS_PER_MILE = 1609.344
+const configuredNearbyApiUrl = import.meta.env.VITE_NEARBY_API_URL?.trim()
+const nearbyApiUrl = configuredNearbyApiUrl || (import.meta.env.DEV ? '/api/nearby-food' : '')
 const GROCERY_SHOPS = new Set([
   'supermarket',
   'convenience',
@@ -134,24 +134,35 @@ export async function searchFoodPlaces(address: string, radiusMiles: number): Pr
     throw new Error('Address lookup returned an invalid location. Check the address and try again.')
   }
 
-  const radiusMeters = Math.round(radiusMiles * METERS_PER_MILE)
-  const query = `
-    [out:json][timeout:25];
-    (
-      nwr(around:${radiusMeters},${point.lat},${point.lon})["amenity"~"^(restaurant|fast_food|cafe|food_court)$"];
-      nwr(around:${radiusMeters},${point.lat},${point.lon})["shop"~"^(supermarket|convenience|butcher|deli|health_food|greengrocer)$"];
-    );
-    out center tags;
-  `
-  const response = await fetch(OVERPASS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', Accept: 'application/json' },
-    body: new URLSearchParams({ data: query }),
-  })
+  if (!nearbyApiUrl) {
+    throw new Error('Nearby business search is not configured for this hosted app yet.')
+  }
+
+  let response: Response
+  try {
+    response = await fetch(nearbyApiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ lat: point.lat, lon: point.lon, radiusMiles }),
+    })
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error('Nearby business search could not reach the OpenStreetMap service. Check your connection and try again.')
+    }
+    throw error
+  }
   if (!response.ok) {
     throw new Error(`Nearby business search is unavailable right now (${response.status}). Try again later.`)
   }
-  const data = (await response.json()) as OverpassResponse
+  let data: OverpassResponse
+  try {
+    data = (await response.json()) as OverpassResponse
+  } catch {
+    throw new Error('Nearby business search returned an unreadable response. Try again later.')
+  }
+  if (!Array.isArray(data.elements)) {
+    throw new Error('Nearby business search returned an invalid response. Try again later.')
+  }
   const matches = data.elements
     .map((element) => mapPlace(element, point))
     .filter((place): place is FoodPlace => place !== null && place.distanceMiles <= radiusMiles)

@@ -116,6 +116,10 @@ export function toSanFranciscoDateTimeInput(date = new Date()): string {
   return `${value.year}-${value.month}-${value.day}T${value.hour}:${value.minute}`
 }
 
+export function defaultMealTime(date = new Date()): string {
+  return toSanFranciscoDateTimeInput(new Date(date.getTime() + 2 * 60 * 60 * 1000))
+}
+
 export function createScheduleDate(dateTime: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(dateTime)
   if (!match) return null

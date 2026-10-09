@@ -35,9 +35,9 @@ import {
   createMealGroup,
   createScheduleDate,
   createUniqueId,
+  defaultMealTime,
   DIETARY_NEEDS,
   isValidMealPlan,
-  toSanFranciscoDateTimeInput,
   totalPeople,
   type Allergen,
   type DietaryNeed,
@@ -402,6 +402,7 @@ function GroupEditor({
   onChange: (next: MealGroup) => void
   onRemove: () => void
 }) {
+  const [countFocused, setCountFocused] = useState(false)
   const toggleDiet = (need: DietaryNeed) => {
     onChange({
       ...group,
@@ -438,8 +439,10 @@ function GroupEditor({
             aria-label={`People in group ${index + 1}`}
             min="0"
             onChange={(event) => onChange({ ...group, count: Math.max(0, Number(event.target.value)) })}
+            onFocus={() => setCountFocused(true)}
+            onBlur={() => setCountFocused(false)}
             type="number"
-            value={group.count}
+            value={group.count === 0 && countFocused ? '' : group.count}
           />
         </label>
         {canRemove && (
@@ -554,8 +557,7 @@ function saveLocalPlans(plans: StoredPlan[]) {
 function Planner() {
   const { user, demoMode } = useAuth()
   const [address, setAddress] = useState('')
-  const [addressDisclosure, setAddressDisclosure] = useState(false)
-  const [mealTime, setMealTime] = useState(() => toSanFranciscoDateTimeInput())
+  const [mealTime, setMealTime] = useState(() => defaultMealTime())
   const [groups, setGroups] = useState<MealGroup[]>([{ ...createMealGroup('group-one'), name: 'Meal group 1' }])
   const [budgetText, setBudgetText] = useState('')
   const [radiusMiles, setRadiusMiles] = useState(5)
@@ -687,10 +689,6 @@ function Planner() {
     setError('')
     setNotice('')
     setVisiblePlaceCount(PLACE_PAGE_SIZE)
-    if (!addressDisclosure) {
-      setError('Confirm the location-search disclosure before searching.')
-      return
-    }
     if (!isValidMealPlan(groups)) {
       setError('Enter at least one person and check that all meal-group counts are correct.')
       return
@@ -821,7 +819,6 @@ function Planner() {
     setBudgetText(plan.budget === null ? '' : String(plan.budget))
     setRadiusMiles(plan.radiusMiles)
     setAddress('')
-    setAddressDisclosure(false)
     setPlaces(null)
     setMenuResults({})
     setMenuScanCandidates([])
@@ -1033,7 +1030,7 @@ function Planner() {
             <section className="location-section" aria-labelledby="location-heading">
               <div className="section-heading">
                 <span className="section-icon"><MapPin size={17} /></span>
-                <div><h2 id="location-heading">Where should food go?</h2><p>Enter the shelter address. We only use it to search nearby.</p></div>
+                <div><h2 id="location-heading">Where should food go?</h2><p>We send the address to OpenStreetMap to find nearby businesses; it is not saved with your meal plan.</p></div>
               </div>
               <label className="address-label" htmlFor="shelter-address">Shelter delivery address</label>
               <div className="address-control">
@@ -1048,10 +1045,6 @@ function Planner() {
                 />
                 {address && <button aria-label="Clear address" className="address-clear" onClick={() => setAddress('')} type="button"><X size={17} /></button>}
               </div>
-              <label className="disclosure-check">
-                <input checked={addressDisclosure} onChange={(event) => setAddressDisclosure(event.target.checked)} type="checkbox" />
-                <span>Send this address to OpenStreetMap to find nearby businesses. We do not save it with the plan.</span>
-              </label>
             </section>
 
             <div className="settings-row">

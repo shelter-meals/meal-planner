@@ -28,8 +28,16 @@ const MAX_REQUEST_BYTES = 24_000
 const MAX_PAGE_BYTES = 250_000
 const MAX_ROBOTS_BYTES = 50_000
 const MAX_FETCH_MS = 4_000
+const MAX_OVERPASS_BYTES = 3_000_000
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
 const USER_AGENT = 'ShelterMealPlanner'
 const SCAN_MESSAGE = 'No itemized menu data could be read from this site.'
+
+interface NearbySearchRequest {
+  lat: number
+  lon: number
+  radiusMiles: 5 | 10 | 15
+}
 
 class ScanFailure extends Error {
   readonly status: MenuDiscoveryResult['status']
@@ -347,9 +355,99 @@ function parseCandidates(body: unknown): MenuCandidate[] | null {
   return candidates
 }
 
+function parseNearbySearchRequest(body: unknown): NearbySearchRequest | null {
+  if (!body || typeof body !== 'object') return null
+  const candidate = body as Record<string, unknown>
+  if (typeof candidate.lat !== 'number' || !Number.isFinite(candidate.lat)
+    || candidate.lat < -90 || candidate.lat > 90
+    || typeof candidate.lon !== 'number' || !Number.isFinite(candidate.lon)
+    || candidate.lon < -180 || candidate.lon > 180
+    || (candidate.radiusMiles !== 5 && candidate.radiusMiles !== 10 && candidate.radiusMiles !== 15)) {
+    return null
+  }
+  return {
+    lat: candidate.lat,
+    lon: candidate.lon,
+    radiusMiles: candidate.radiusMiles,
+  }
+}
+
+async function handleNearbyFoodSearch(request: Request, environment: Environment): Promise<Response> {
+  const origin = request.headers.get('Origin')
+  if (request.method === 'OPTIONS') {
+    return allowedOrigin(origin, environment)
+      ? new Response(null, { status: 204, headers: responseHeaders(origin, environment) })
+      : jsonResponse({ error: 'This app origin is not allowed.' }, 403, origin, environment)
+  }
+  if (!allowedOrigin(origin, environment)) {
+    return jsonResponse({ error: 'This app origin is not allowed.' }, 403, origin, environment)
+  }
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Use POST for nearby business searches.' }, 405, origin, environment)
+  }
+  let body: unknown
+  try {
+    body = JSON.parse(await readTextLimited(request, 1_000)) as unknown
+  } catch (error) {
+    if (error instanceof ScanFailure && error.message.includes('size limit')) {
+      return jsonResponse({ error: 'The nearby-search request is too large.' }, 413, origin, environment)
+    }
+    return jsonResponse({ error: 'The nearby-search request is invalid JSON.' }, 400, origin, environment)
+  }
+  const search = parseNearbySearchRequest(body)
+  if (!search) {
+    return jsonResponse({ error: 'Provide valid coordinates and a search radius of 5, 10, or 15 miles.' }, 400, origin, environment)
+  }
+  const radiusMeters = Math.round(search.radiusMiles * 1609.344)
+  const query = `
+    [out:json][timeout:25];
+    (
+      nwr(around:${radiusMeters},${search.lat},${search.lon})["amenity"~"^(restaurant|fast_food|cafe|food_court)$"];
+      nwr(around:${radiusMeters},${search.lat},${search.lon})["shop"~"^(supermarket|convenience|butcher|deli|health_food|greengrocer)$"];
+    );
+    out center tags;
+  `
+  let upstream: Response
+  try {
+    upstream = await fetch(OVERPASS_URL, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        'User-Agent': `${USER_AGENT}/0.1`,
+      },
+      body: new URLSearchParams({ data: query }),
+      signal: AbortSignal.timeout(30_000),
+    })
+  } catch {
+    return jsonResponse({ error: 'OpenStreetMap nearby search could not be reached. Try again shortly.' }, 503, origin, environment)
+  }
+  if (!upstream.ok) {
+    return jsonResponse({ error: `OpenStreetMap nearby search is temporarily unavailable (${upstream.status}). Try again shortly.` }, 503, origin, environment)
+  }
+  let data: unknown
+  try {
+    data = JSON.parse(await readTextLimited(upstream, MAX_OVERPASS_BYTES)) as unknown
+  } catch {
+    return jsonResponse({ error: 'OpenStreetMap returned an unreadable nearby-search response.' }, 502, origin, environment)
+  }
+  if (!data || typeof data !== 'object' || !Array.isArray((data as { elements?: unknown }).elements)) {
+    return jsonResponse({ error: 'OpenStreetMap returned an invalid nearby-search response.' }, 502, origin, environment)
+  }
+  const response = data as { elements: unknown[]; osm3s?: { timestamp_osm_base?: string } }
+  return jsonResponse({
+    elements: response.elements,
+    osm3s: response.osm3s,
+  }, 200, origin, environment)
+}
+
 export async function handleMenuDiscovery(request: Request, environment: Environment): Promise<Response> {
   const origin = request.headers.get('Origin')
-  if (new URL(request.url).pathname !== '/api/menu-discovery') {
+  const pathname = new URL(request.url).pathname
+  if (pathname === '/api/nearby-food') {
+    return handleNearbyFoodSearch(request, environment)
+  }
+  if (pathname !== '/api/menu-discovery') {
     return jsonResponse({ error: 'Menu discovery was not found.' }, 404, origin, environment)
   }
   if (request.method === 'OPTIONS') {

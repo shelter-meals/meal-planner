@@ -25,7 +25,7 @@ npm run build
 
 ## Live business search
 
-Searches are initiated by the volunteer and use the OpenStreetMap Nominatim geocoder and Overpass API for nearby business listings. The exact shelter address is sent to Nominatim; the selected coordinates are sent to Overpass. A session-only cache avoids repeated geocoding for the same address. The app does not save the address or search coordinates with a plan.
+Searches are initiated by the volunteer and use the OpenStreetMap Nominatim geocoder and Overpass API for nearby business listings. The exact shelter address is sent to Nominatim. The selected coordinates and search radius are sent to the Cloudflare Worker, which forwards the bounded query to Overpass; the street address is not sent to that Worker. A session-only cache avoids repeated geocoding for the same address. The app does not save the address or search coordinates with a plan.
 
 OpenStreetMap data may be missing or out of date. Mapped hours and delivery tags are not confirmed with a business, and listings generally do not contain current menus, ingredient/allergen details, inventory, or delivery availability. The app displays those gaps and generates an editable count of complete meals per dietary group for grocery planning. Volunteers must confirm food, ingredients, stock, and delivery with providers.
 
@@ -37,7 +37,7 @@ After a restaurant search, the menu service checks at most five of the highest-r
 
 Extracted items are shown with their source and retrieval time, held only in the current page session, and are not saved with meal plans or sent to Firebase. The Worker receives only OpenStreetMap listing IDs and mapped website URLs, not business names, the shelter address, group counts, or dietary needs. The app can draft one likely main-course item per person only when a matching item is explicitly labeled for every selected dietary need. If evidence is missing, volunteers can review the listed items and choose only after contacting the provider. Suggestions follow the menu's listed order, not popularity or availability. Allergens and cross-contact are never inferred safe. Draft quantities assume one menu item per person and remain editable; prices and serving sizes must be confirmed.
 
-The scan requires a separate Cloudflare Worker. For local development, start these in separate terminals from `app/`:
+Nearby business search and published-menu checks use the same Cloudflare Worker. For local development, start these in separate terminals from `app/`:
 
 ```sh
 npm run menu:dev
@@ -50,7 +50,7 @@ For deployment, keep the Cloudflare account on the **Workers Free** plan and do 
 npm run menu:deploy -- --var ALLOWED_ORIGINS:https://YOUR_FIREBASE_PROJECT.web.app
 ```
 
-Set `VITE_MENU_API_URL` in `app/.env.local` to the deployed Worker URL ending in `/api/menu-discovery`, then rebuild and deploy Firebase Hosting. The Worker has no database binding, does not persist menu results, and does not inherit app `.env.local` credentials. If a free quota is reached, menu checks stop; nearby business search remains available.
+Set `VITE_NEARBY_API_URL` in `app/.env.local` to the deployed Worker URL ending in `/api/nearby-food` and `VITE_MENU_API_URL` to the same Worker URL ending in `/api/menu-discovery`, then rebuild and deploy Firebase Hosting. The Worker has no database binding, does not persist search or menu results, and does not inherit app `.env.local` credentials. If a free quota is reached, nearby search or menu checks stop.
 
 The Worker is a public prototype endpoint, not an authenticated API; its exact-origin CORS check is not authentication. Keep it on the Free plan (so limits stop work rather than create charges), and add real request authentication or rate limiting before broader operational use.
 

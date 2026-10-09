@@ -84,7 +84,7 @@ After a fire, volunteers may need to arrange meals at unusual hours, including o
 - Treat severe allergies and strict religious/medical requirements as constraints requiring direct provider confirmation; do not claim a recommendation is safe based only on listing or menu data.
 - Distinguish verified data, third-party data, estimates, and unknowns in the interface.
 - Never represent a business as open or deliverable without showing the basis and recency of that information.
-- Disclose that the shelter address is sent to external geocoding/business-search providers when searching; do not include it in saved plans.
+- Disclose that the shelter address is sent to the OpenStreetMap geocoder when searching, and that the resulting coordinates and radius pass through the Cloudflare Worker to the OpenStreetMap business-search service; do not include the address or coordinates in saved plans.
 - Collect only the incident and meal information needed to prepare a plan. Do not request names or other identifying details for meal recipients in the initial release.
 - Save plans with an explicit delete option, but never include the shelter address in the saved plan. Define access controls and review logs, backups, and provider/API handling so the address is not unintentionally retained.
 - Keep saved plans private to their owner unless the owner explicitly shares a plan with another signed-in volunteer, either by entering the volunteer's email or creating a sign-in-required share link.

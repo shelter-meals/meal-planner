@@ -16,7 +16,69 @@ function menuRequest(places: unknown[], origin = 'http://localhost:5173'): Reque
   })
 }
 
+function nearbyRequest(
+  body: unknown,
+  origin = 'http://localhost:5173',
+  method = 'POST',
+): Request {
+  return new Request('https://menu-worker.example/api/nearby-food', {
+    method,
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: method === 'POST' ? JSON.stringify(body) : undefined,
+  })
+}
+
 afterEach(() => vi.unstubAllGlobals())
+
+describe('nearby OpenStreetMap proxy', () => {
+  it('validates coordinates and the supported radius before calling Overpass', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(nearbyRequest({
+      lat: 91,
+      lon: -122,
+      radiusMiles: 5,
+    }), environment)
+    expect(response.status).toBe(400)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('forwards bounded coordinates to Overpass and returns nearby listing data', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(_input)).toBe('https://overpass-api.de/api/interpreter')
+      expect(init?.headers).toMatchObject({ 'User-Agent': 'ShelterMealPlanner/0.1' })
+      const body = init?.body as URLSearchParams
+      expect(body.get('data')).toContain('around:8047,37.7729681,-122.4214546')
+      return new Response(JSON.stringify({
+        elements: [{ type: 'node', id: 123, lat: 37.77, lon: -122.42, tags: { name: 'Cafe' } }],
+        osm3s: { timestamp_osm_base: '2026-10-09T00:00:00Z' },
+      }), { headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(nearbyRequest({
+      lat: 37.7729681,
+      lon: -122.4214546,
+      radiusMiles: 5,
+    }), environment)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173')
+    expect(await response.json()).toMatchObject({
+      elements: [{ id: 123, tags: { name: 'Cafe' } }],
+      osm3s: { timestamp_osm_base: '2026-10-09T00:00:00Z' },
+    })
+  })
+
+  it('reports upstream unavailability as a service error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Unavailable', { status: 429 })))
+    const response = await handleMenuDiscovery(nearbyRequest({
+      lat: 37.77,
+      lon: -122.42,
+      radiusMiles: 10,
+    }), environment)
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining('(429)') })
+  })
+})
 
 describe('menu website safety checks', () => {
   it('upgrades mapped HTTP website links and rejects local, IP, and credential URLs', () => {
