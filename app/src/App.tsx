@@ -70,6 +70,7 @@ import type { MealPlanData } from './types'
 import './App.css'
 
 type ResultFilter = 'restaurants' | 'groceries'
+const PLACE_PAGE_SIZE = 8
 
 function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Try again.'
@@ -378,6 +379,7 @@ function Planner() {
   const [searchedFingerprint, setSearchedFingerprint] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<ResultFilter>('restaurants')
+  const [visiblePlaceCount, setVisiblePlaceCount] = useState(PLACE_PAGE_SIZE)
   const [groceryLines, setGroceryLines] = useState<GroceryLine[]>([])
   const [checkedLines, setCheckedLines] = useState<string[]>([])
   const [savedPlans, setSavedPlans] = useState<StoredPlan[]>([])
@@ -474,6 +476,7 @@ function Planner() {
   async function performSearch(searchRadius = radiusMiles) {
     setError('')
     setNotice('')
+    setVisiblePlaceCount(PLACE_PAGE_SIZE)
     if (!addressDisclosure) {
       setError('Confirm the location-search disclosure before searching.')
       return
@@ -919,18 +922,32 @@ function Planner() {
               </div>
 
               <div className="result-tabs" role="tablist" aria-label="Business type">
-                <button aria-selected={filter === 'restaurants'} className={filter === 'restaurants' ? 'is-active' : ''} onClick={() => setFilter('restaurants')} role="tab" type="button">
+                <button aria-selected={filter === 'restaurants'} className={filter === 'restaurants' ? 'is-active' : ''} onClick={() => {
+                  setFilter('restaurants')
+                  setVisiblePlaceCount(PLACE_PAGE_SIZE)
+                }} role="tab" type="button">
                   <Utensils size={16} /> Restaurants <span>{selectedPlaceCount}</span>
                 </button>
-                <button aria-selected={filter === 'groceries'} className={filter === 'groceries' ? 'is-active' : ''} onClick={() => setFilter('groceries')} role="tab" type="button">
+                <button aria-selected={filter === 'groceries'} className={filter === 'groceries' ? 'is-active' : ''} onClick={() => {
+                  setFilter('groceries')
+                  setVisiblePlaceCount(PLACE_PAGE_SIZE)
+                }} role="tab" type="button">
                   <ShoppingBasket size={16} /> Grocery stores <span>{groceryPlaceCount}</span>
                 </button>
               </div>
 
               {resultPlaces.length > 0 ? (
-                <div className="place-list">
-                  {resultPlaces.map((place) => <PlaceRow groups={groups} key={place.id} place={place} scheduledTime={scheduledTime} />)}
-                </div>
+                <>
+                  <div aria-live="polite" className="place-list">
+                    {resultPlaces.slice(0, visiblePlaceCount).map((place) => <PlaceRow groups={groups} key={place.id} place={place} scheduledTime={scheduledTime} />)}
+                  </div>
+                  {visiblePlaceCount < resultPlaces.length && (
+                    <button className="button-secondary show-more-places" onClick={() => setVisiblePlaceCount((count) => count + PLACE_PAGE_SIZE)} type="button">
+                      Show {Math.min(PLACE_PAGE_SIZE, resultPlaces.length - visiblePlaceCount)} more
+                      <span>{resultPlaces.length - visiblePlaceCount} remaining</span>
+                    </button>
+                  )}
+                </>
               ) : (
                 <div className="empty-results">
                   <div className="empty-results__icon">{filter === 'restaurants' ? <Utensils size={22} /> : <Store size={22} />}</div>

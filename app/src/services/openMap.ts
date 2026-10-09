@@ -31,6 +31,15 @@ export interface PlaceSearchResult {
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search'
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
 const METERS_PER_MILE = 1609.344
+const GROCERY_SHOPS = new Set([
+  'supermarket',
+  'convenience',
+  'butcher',
+  'deli',
+  'health_food',
+  'greengrocer',
+])
+const NON_FOOD_SHOPS = new Set(['alcohol', 'beverages', 'gas', 'liquor', 'tobacco', 'vape'])
 let lastGeocodingRequest = 0
 
 function distanceMiles(from: { lat: number; lon: number }, to: { lat: number; lon: number }): number {
@@ -42,6 +51,14 @@ function distanceMiles(from: { lat: number; lon: number }, to: { lat: number; lo
   return (6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))) / 1.609344
 }
 
+export function isGroceryStore(tags: Record<string, string>): boolean {
+  const hasFuelTags = Object.keys(tags).some((key) => key === 'fuel' || key.startsWith('fuel:'))
+  return GROCERY_SHOPS.has(tags.shop ?? '')
+    && tags.amenity !== 'fuel'
+    && !NON_FOOD_SHOPS.has(tags.shop ?? '')
+    && !hasFuelTags
+}
+
 function mapPlace(element: OverpassElement, point: { lat: number; lon: number }): FoodPlace | null {
   const tags = element.tags ?? {}
   const lat = element.lat ?? element.center?.lat
@@ -51,26 +68,29 @@ function mapPlace(element: OverpassElement, point: { lat: number; lon: number })
 
   const amenity = tags.amenity
   const shop = tags.shop
-  const category = amenity ? 'restaurant' : 'grocery'
-  const typeLabel = amenity === 'fast_food'
+  const groceryStore = isGroceryStore(tags)
+  const foodAmenity = ['restaurant', 'fast_food', 'cafe', 'food_court'].includes(amenity ?? '')
+  if (!groceryStore && !foodAmenity) return null
+  const category = groceryStore ? 'grocery' : 'restaurant'
+  const typeLabel = groceryStore
+    ? shop === 'supermarket'
+      ? 'Supermarket'
+      : shop === 'convenience'
+        ? 'Convenience store'
+        : shop === 'butcher'
+          ? 'Butcher'
+          : shop === 'deli'
+            ? 'Deli'
+            : shop === 'health_food'
+              ? 'Health food store'
+              : 'Greengrocer'
+    : amenity === 'fast_food'
     ? 'Fast food'
     : amenity === 'food_court'
       ? 'Food court'
       : amenity === 'cafe'
         ? 'Cafe'
-        : amenity === 'restaurant'
-          ? 'Restaurant'
-          : shop === 'supermarket'
-            ? 'Supermarket'
-            : shop === 'convenience'
-              ? 'Convenience store'
-              : shop === 'butcher'
-                ? 'Butcher'
-                : shop === 'deli'
-                  ? 'Deli'
-                  : shop === 'health_food'
-                    ? 'Health food store'
-                    : 'Food store'
+        : 'Restaurant'
 
   return {
     id: `${element.type}-${element.id}`,

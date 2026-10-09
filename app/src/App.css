@@ -997,7 +997,8 @@
   align-items: center;
   gap: 7px;
   margin: 12px 0 0 41px;
-  padding: 6px 0;
+  min-height: 44px;
+  padding: 6px 10px;
   border: 0;
   background: transparent;
   color: #23586a;
@@ -1663,6 +1664,18 @@
 .signin-form {
   display: grid;
   gap: 9px;
+}
+
+.show-more-places {
+  display: flex;
+  gap: 8px;
+  margin: 14px auto 0;
+}
+
+.show-more-places span {
+  color: #657982;
+  font-size: 11px;
+  font-weight: 500;
   width: 100%;
 }
 
@@ -1994,6 +2007,16 @@
 
   .meal-groups {
     margin-left: 0;
+  }
+
+  .add-group {
+    justify-content: center;
+    width: 100%;
+    margin-left: 0;
+    border: 1px dashed #bdcdd1;
+    border-radius: 5px;
+    background: #f6f9f9;
+    touch-action: manipulation;
   }
 
   .need-block,

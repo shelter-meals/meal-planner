@@ -8,7 +8,7 @@ import {
   totalPeople,
   type MealGroup,
 } from './domain'
-import { getHoursState } from './services/openMap'
+import { getHoursState, isGroceryStore } from './services/openMap'
 
 describe('meal group calculations', () => {
   it('counts people once across meal groups with combined needs', () => {
@@ -43,6 +43,17 @@ describe('meal group calculations', () => {
 describe('San Francisco meal times', () => {
   it('formats a time in the San Francisco timezone', () => {
     expect(toSanFranciscoDateTimeInput(new Date('2026-10-09T05:00:00.000Z'))).toBe('2026-10-08T22:00')
+  })
+
+  describe('nearby grocery listings', () => {
+    it('accepts food retailers and excludes fuel and alcohol retailers', () => {
+      expect(isGroceryStore({ shop: 'supermarket' })).toBe(true)
+      expect(isGroceryStore({ shop: 'convenience' })).toBe(true)
+      expect(isGroceryStore({ shop: 'convenience', amenity: 'fuel' })).toBe(false)
+      expect(isGroceryStore({ shop: 'convenience', 'fuel:diesel': 'yes' })).toBe(false)
+      expect(isGroceryStore({ shop: 'alcohol' })).toBe(false)
+      expect(isGroceryStore({ shop: 'beverages' })).toBe(false)
+    })
   })
 
   it('parses the selected wall-clock time', () => {

@@ -106,6 +106,7 @@ After a fire, volunteers may need to arrange meals at unusual hours, including o
 The current app is a personal prototype of the intake, nearby-listing, and grocery-checklist workflow. It is not yet a complete implementation of the target acceptance criteria above.
 
 - Nearby candidates come from user-triggered OpenStreetMap searches. Mapped hours and delivery tags are unverified; current menus, delivery availability, inventory, prices, and allergy safety are not available from this source.
+- Nearby listings show eight options at a time, with a control to reveal more. Fuel stations and alcohol retailers are excluded from grocery results based on their map tags.
 - The app does not generate restaurant menu orders, recommend a split order across restaurants, or identify in-stock grocery products. It shows nearby candidates and an editable count of complete meal units for grocery planning instead.
 - Volunteers must verify menus, quantities, delivery, ingredients, stock, and allergy or strict-diet handling directly with providers.
 - Without Firebase configuration, the app runs in local-preview mode and stores demo plans only in that browser. Online authentication, Firestore persistence, and sharing require a configured Firebase project.
