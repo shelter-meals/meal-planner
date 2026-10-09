@@ -81,7 +81,17 @@ export function createGroceryLines(groups: MealGroup[]): GroceryLine[] {
     }))
 }
 
-export function createMealGroup(id: string = crypto.randomUUID()): MealGroup {
+let fallbackIdCounter = 0
+
+export function createUniqueId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  fallbackIdCounter += 1
+  return `local-${Date.now().toString(36)}-${fallbackIdCounter.toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+export function createMealGroup(id: string = createUniqueId()): MealGroup {
   return {
     id,
     name: 'Meal group',

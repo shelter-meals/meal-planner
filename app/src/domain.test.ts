@@ -3,6 +3,7 @@ import {
   createGroceryLines,
   createMealGroup,
   createScheduleDate,
+  createUniqueId,
   isValidMealPlan,
   toSanFranciscoDateTimeInput,
   totalPeople,
@@ -11,6 +12,14 @@ import {
 import { getHoursState, isGroceryStore } from './services/openMap'
 
 describe('meal group calculations', () => {
+  it('generates distinct IDs for meal groups and local demo plans', () => {
+    const first = createUniqueId()
+    const second = createMealGroup().id
+    expect(first).not.toBe(second)
+    expect(first.length).toBeGreaterThan(0)
+    expect(second.length).toBeGreaterThan(0)
+  })
+
   it('counts people once across meal groups with combined needs', () => {
     const groups: MealGroup[] = [
       { ...createMealGroup('first'), count: 4, diets: ['Vegetarian', 'Gluten-free'] },

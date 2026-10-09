@@ -34,6 +34,7 @@ import {
   createGroceryLines,
   createMealGroup,
   createScheduleDate,
+  createUniqueId,
   DIETARY_NEEDS,
   isValidMealPlan,
   toSanFranciscoDateTimeInput,
@@ -548,7 +549,7 @@ function Planner() {
       if (demoMode) {
         const plan: StoredPlan = {
           ...data,
-          id: crypto.randomUUID(),
+          id: createUniqueId(),
           ownerUid: 'local-demo',
           ownerEmail: 'This browser only',
           sharedWith: [],
