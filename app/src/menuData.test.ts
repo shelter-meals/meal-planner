@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createMealGroup, type MealGroup } from './domain'
 import {
   compareRestaurantRank,
+  createFallbackOrderLines,
   createDraftOrderLines,
   findMenuLinks,
   itemHasPublishedDietEvidence,
@@ -32,6 +33,167 @@ const structuredMenu = {
 }
 
 const bowl = parseMenuHtml(`<script type="application/ld+json">${JSON.stringify(structuredMenu)}</script>`).items[0]
+
+describe('fallback restaurant order suggestions', () => {
+  const regularGroup = { ...createMealGroup('regular'), count: 20 }
+  const vegetarianGroup: MealGroup = {
+    ...createMealGroup('vegetarian'),
+    count: 2,
+    diets: ['Vegetarian'],
+  }
+  const halalGroup: MealGroup = {
+    ...createMealGroup('halal'),
+    count: 3,
+    diets: ['Halal'],
+  }
+
+  it('suggests gyros and vegetarian entrees for Halal Guys when menus are unavailable', () => {
+    const place = {
+      id: 'halal-guys',
+      name: 'The Halal Guys',
+      category: 'restaurant' as const,
+      typeLabel: 'Fast food',
+      lat: 0,
+      lon: 0,
+      distanceMiles: 1,
+      tags: {},
+    }
+
+    expect(createFallbackOrderLines([regularGroup, vegetarianGroup], place).map(({ label, quantity, unit }) => ({
+      label,
+      quantity,
+      unit,
+    }))).toEqual([
+      { label: 'Gyro plates', quantity: 20, unit: 'plates' },
+      { label: 'Falafel or vegetarian entrees', quantity: 2, unit: 'plates' },
+    ])
+  })
+
+  it('estimates pizza counts by topping and dietary group', () => {
+    const place = {
+      id: 'pizza-place',
+      name: 'Neighborhood Pizza',
+      category: 'restaurant' as const,
+      typeLabel: 'Restaurant',
+      lat: 0,
+      lon: 0,
+      distanceMiles: 1,
+      tags: { cuisine: 'pizza' },
+    }
+
+    expect(createFallbackOrderLines([regularGroup, vegetarianGroup], place).map(({ label, quantity, unit }) => ({
+      label,
+      quantity,
+      unit,
+    }))).toEqual([
+      { label: 'Pepperoni pizzas', quantity: 5, unit: 'pizzas' },
+      { label: 'Cheese pizzas', quantity: 1, unit: 'pizzas' },
+    ])
+    expect(createFallbackOrderLines([regularGroup], place)[0].detail).toContain('2 slices per person')
+  })
+
+  it('uses protein and vegetarian entrees when restaurant type is unknown', () => {
+    const place = {
+      id: 'unknown-place',
+      name: 'Neighborhood Kitchen',
+      category: 'restaurant' as const,
+      typeLabel: 'Restaurant',
+      lat: 0,
+      lon: 0,
+      distanceMiles: 1,
+      tags: {},
+    }
+
+    expect(createFallbackOrderLines([regularGroup, vegetarianGroup], place).map(({ label, quantity }) => ({
+      label,
+      quantity,
+    }))).toEqual([
+      { label: 'Protein entrees', quantity: 20 },
+      { label: 'Vegetarian entrees', quantity: 2 },
+    ])
+  })
+
+  it('suggests vegetarian entrees for halal groups unless the listing explicitly confirms halal', () => {
+    const place = {
+      id: 'unknown-halal-place',
+      name: 'Neighborhood Kitchen',
+      category: 'restaurant' as const,
+      typeLabel: 'Restaurant',
+      lat: 0,
+      lon: 0,
+      distanceMiles: 1,
+      tags: {},
+    }
+
+    expect(createFallbackOrderLines([halalGroup], place)[0]).toMatchObject({
+      label: 'Vegetarian entrees',
+      quantity: 3,
+    })
+    expect(createFallbackOrderLines([halalGroup], {
+      ...place,
+      tags: { 'diet:halal': 'yes' },
+    })[0].label).toBe('Halal protein entrees')
+    expect(createFallbackOrderLines([halalGroup], {
+      ...place,
+      tags: { cuisine: 'halal' },
+    })[0].label).toBe('Halal protein entrees')
+  })
+
+  it('suggests halal gyro plates for a halal group at The Halal Guys', () => {
+    const place = {
+      id: 'halal-guys',
+      name: 'The Halal Guys',
+      category: 'restaurant' as const,
+      typeLabel: 'Fast food',
+      lat: 0,
+      lon: 0,
+      distanceMiles: 1,
+      tags: {},
+    }
+
+    expect(createFallbackOrderLines([halalGroup], place)[0]).toMatchObject({
+      label: 'Halal gyro plates',
+      quantity: 3,
+    })
+  })
+
+  it('uses restaurant descriptions and cuisine tags to make fallback meals more specific', () => {
+    const place = {
+      id: 'mexican-place',
+      name: 'Neighborhood Kitchen',
+      category: 'restaurant' as const,
+      typeLabel: 'Restaurant',
+      lat: 0,
+      lon: 0,
+      distanceMiles: 1,
+      tags: { description: 'Mexican taqueria serving fresh tacos and burritos' },
+    }
+
+    expect(createFallbackOrderLines([regularGroup, vegetarianGroup], place).map(({ label }) => label)).toEqual([
+      'Chicken or beef tacos with rice and beans',
+      'Bean-and-cheese burritos or vegetable tacos',
+    ])
+  })
+
+  it('uses specific halal meals only when the listing confirms halal', () => {
+    const place = {
+      id: 'indian-place',
+      name: 'Neighborhood Kitchen',
+      category: 'restaurant' as const,
+      typeLabel: 'Restaurant',
+      lat: 0,
+      lon: 0,
+      distanceMiles: 1,
+      tags: { cuisine: 'Indian' },
+    }
+
+    expect(createFallbackOrderLines([halalGroup], place)[0].label).toBe('Paneer curry or dal with rice')
+    expect(createFallbackOrderLines([halalGroup], {
+      ...place,
+      tags: { cuisine: 'Indian; halal' },
+    })[0].label).toBe('Halal chicken curry with rice')
+  })
+})
 
 describe('published menu extraction', () => {
   it('extracts nested menu sections, exact published diet labels, and prices', () => {

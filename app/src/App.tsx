@@ -8,33 +8,27 @@ import {
   Globe2,
   ListChecks,
   LoaderCircle,
-  LockKeyhole,
-  Mail,
   MapPin,
   Plus,
   Search,
-  Share2,
-  ShieldCheck,
   ShoppingBasket,
   Store,
   Trash2,
   Utensils,
   X,
 } from 'lucide-react'
-import { signOut } from 'firebase/auth'
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
-  type ReactNode,
 } from 'react'
 import {
   ALLERGENS,
   createGroceryLines,
   createMealGroup,
   createScheduleDate,
-  createUniqueId,
   defaultMealTime,
   DIETARY_NEEDS,
   isValidMealPlan,
@@ -45,42 +39,19 @@ import {
   type GroceryLine,
   type MealGroup,
 } from './domain'
-import {
-  compareRestaurantRank,
-  createDraftOrderLines,
-  type MenuDiscoveryResult,
-  type RestaurantRankEvidence,
-} from './menuData'
-import { AuthGate } from './auth/AuthGate'
-import { useAuth } from './auth/AuthContext'
-import {
-  auth,
-  claimMealPlanShareLink,
-  createMealPlanShareLink,
-  deleteMealPlan,
-  listMealPlans,
-  listMealPlanShareLinks,
-  removeMealPlanShare,
-  revokeMealPlanShareLink,
-  saveMealPlan,
-  shareMealPlanWithEmail,
-  type StoredPlan,
-} from './services/firebase'
+import { createFallbackOrderLines } from './menuData'
+import { getRestaurantLinks } from './restaurantLinks'
 import {
   getAvailabilityRank,
   getDeliveryStatus,
-  getDietTag,
   getHoursState,
   searchFoodPlaces,
   type HoursState,
 } from './services/openMap'
-import { discoverMenus } from './services/menuDiscovery'
-import type { MealPlanData } from './types'
 import './App.css'
 
 type ResultFilter = 'restaurants' | 'groceries'
 const PLACE_PAGE_SIZE = 8
-const MENU_SCAN_LIMIT = 5
 
 function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Try again.'
@@ -136,97 +107,20 @@ function MapStatus({ state }: { state: HoursState }) {
   return <span className={`status-pill hours-${state}`}><Clock3 size={14} />{copy}</span>
 }
 
-function safeWebsiteUrl(value: string | undefined): string | null {
-  if (!value) return null
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null
-  } catch {
-    return null
-  }
-}
-
-function formatPublishedPrice(price: number, currency: string | null): string {
-  if (!currency) return `${price.toFixed(2)} (currency not stated)`
-  try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(price)
-  } catch {
-    return `${currency} ${price.toFixed(2)}`
-  }
-}
-
-function formatMenuRetrievalTime(value: string): string {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime())
-    ? 'time unavailable'
-    : new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
-}
-
-function menuMatchCount(place: FoodPlace, groups: MealGroup[], menuResults: Record<string, MenuDiscoveryResult>): number {
-  const result = menuResults[place.id]
-  if (result?.status !== 'menu_found') return 0
-  return createDraftOrderLines(groups, result.items).filter((line) => line.candidates.length > 0).length
-}
-
-function rankEvidence(
-  place: FoodPlace,
-  scheduledTime: Date | null,
-  groups: MealGroup[],
-  menuResults: Record<string, MenuDiscoveryResult>,
-): RestaurantRankEvidence {
-  return {
-    availabilityRank: getAvailabilityRank(place.tags, scheduledTime),
-    distanceMiles: place.distanceMiles,
-    menuMatchCount: menuMatchCount(place, groups, menuResults),
-  }
-}
-
-function rankFoodPlaces(
-  places: FoodPlace[],
-  scheduledTime: Date | null,
-  groups: MealGroup[],
-  menuResults: Record<string, MenuDiscoveryResult>,
-): FoodPlace[] {
-  return places
-    .map((place) => ({ place, evidence: rankEvidence(place, scheduledTime, groups, menuResults) }))
-    .sort((a, b) => compareRestaurantRank(a.evidence, b.evidence))
-    .map(({ place }) => place)
-}
-
 function PlaceRow({
   place,
   scheduledTime,
   groups,
-  menuResult,
-  isMenuScanCandidate,
-  menuScanState,
 }: {
   place: FoodPlace
   scheduledTime: Date | null
   groups: MealGroup[]
-  menuResult?: MenuDiscoveryResult
-  isMenuScanCandidate: boolean
-  menuScanState: 'idle' | 'loading' | 'complete' | 'error'
 }) {
-  const [draftQuantities, setDraftQuantities] = useState<Record<string, number>>({})
-  const [selectedItems, setSelectedItems] = useState<Record<string, string>>({})
   const hours = getHoursState(place.tags.opening_hours, scheduledTime)
   const delivery = getDeliveryStatus(place.tags)
-  const listedNeeds = DIETARY_NEEDS.filter((need) => groups.some((group) =>
-    group.diets.includes(need) && getDietTag(place.tags, need),
-  ))
-  const hasDietaryNeeds = groups.some((group) => group.diets.length > 0)
   const phone = place.tags.phone ?? place.tags['contact:phone']
-  const website = safeWebsiteUrl(place.tags.website ?? place.tags['contact:website'] ?? undefined)
-  const menuUrl = menuResult?.menuUrl ? safeWebsiteUrl(menuResult.menuUrl) : null
-  const orderLines = menuResult?.status === 'menu_found'
-    ? createDraftOrderLines(groups, menuResult.items)
-    : []
-  const deliveryText = delivery === 'listed'
-    ? 'Delivery is listed; confirm with the business'
-    : delivery === 'pickup'
-      ? 'Pickup listed; delivery not indicated'
-      : 'Delivery availability unknown'
+  const restaurantLinks = getRestaurantLinks(place)
+  const suggestedOrderLines = createFallbackOrderLines(groups, place)
 
   return (
     <article className="place-row">
@@ -240,150 +134,43 @@ function PlaceRow({
             <span className="place-distance">{place.distanceMiles.toFixed(1)} mi</span>
           </div>
           <p className="place-kind">{place.typeLabel} <span>•</span> straight-line distance</p>
-          <div className="place-statuses">
-            <MapStatus state={hours} />
-            <span className={`status-pill delivery-${delivery}`}>
-              {delivery === 'listed' ? <Check size={14} /> : <AlertTriangle size={14} />}
-              {deliveryText}
-            </span>
-          </div>
-          <div className="place-diet-note">
-            {listedNeeds.length > 0 ? (
-              <span><Check size={14} /> Map listing marks {listedNeeds.join(', ').toLowerCase()}.</span>
-            ) : hasDietaryNeeds ? (
-              <span><AlertTriangle size={14} /> Menu and dietary fit are not verified.</span>
-            ) : (
-              <span><AlertTriangle size={14} /> Menu details are not included in this listing.</span>
-            )}
-            {groups.some((group) => group.allergens.length > 0) && (
-              <strong> No allergy safety information is available here.</strong>
-            )}
-          </div>
-          {(phone || website) && (
+          {(hours === 'open' || delivery === 'listed') && (
+            <div className="place-statuses">
+              {hours === 'open' && <MapStatus state={hours} />}
+              {delivery === 'listed' && (
+                <span className="status-pill delivery-listed">
+                  <Check size={14} /> Delivery listed
+                </span>
+              )}
+            </div>
+          )}
+          {(phone || restaurantLinks.length > 0) && (
             <div className="place-contact">
               {phone && <a href={`tel:${phone.replace(/[^\d+]/g, '')}`}><span>Call</span> {phone}</a>}
-              {website && <a href={website} rel="noreferrer" target="_blank">Business website <ExternalLink size={13} /></a>}
+              {restaurantLinks.map((link) => (
+                <a href={link.href} key={link.href} rel="noreferrer" target="_blank">
+                  {link.label} <ExternalLink size={13} />
+                </a>
+              ))}
             </div>
           )}
           {place.category === 'restaurant' && (
-            <section aria-label={`Published menu and draft order for ${place.name}`} className="menu-evidence">
+            <section aria-label={`Suggested order for ${place.name}`} className="menu-evidence">
               <div className="menu-evidence__heading">
                 <ListChecks aria-hidden="true" size={16} />
-                <strong>Published menu check</strong>
+                <strong>Suggested order</strong>
               </div>
-              {menuResult ? (
-                <>
-                  <p className={`menu-evidence__status menu-status-${menuResult.status}`}>{menuResult.message}</p>
-                  {menuResult.status !== 'menu_found' && menuUrl && (
-                    <a className="menu-source" href={menuUrl} rel="noreferrer" target="_blank">
-                      Open restaurant website <ExternalLink size={13} />
-                    </a>
-                  )}
-                  {menuResult.status === 'menu_found' && (
-                    <>
-                      {menuUrl && (
-                        <a className="menu-source" href={menuUrl} rel="noreferrer" target="_blank">
-                          Open menu source <ExternalLink size={13} />
-                        </a>
-                      )}
-                      <p className="menu-evidence__freshness">
-                        Retrieved {formatMenuRetrievalTime(menuResult.fetchedAt)}
-                        {' · '}Published menu data may be out of date.
-                      </p>
-                      {orderLines.length > 0 && (
-                        <div className="menu-order-lines">
-                          <h4>Draft quantities</h4>
-                          {orderLines.map((line) => {
-                            const options = line.candidates.length ? line.candidates : line.options
-                            const selectedId = selectedItems[line.groupId]
-                              ?? (line.candidates.length === 1 ? line.candidates[0].id : '')
-                            const selectedItem = options.find((item) => item.id === selectedId)
-                            const quantity = draftQuantities[line.groupId] ?? line.quantity
-                            return (
-                              <div className="menu-order-line" key={line.groupId}>
-                                <div className="menu-order-line__copy">
-                                  <strong>{line.groupName}</strong>
-                                  {options.length > 1 || (options.length > 0 && line.candidates.length === 0) ? (
-                                    <label className="menu-item-select">
-                                      <span className="sr-only">Menu item for {line.groupName}</span>
-                                      <select
-                                        onChange={(event) => setSelectedItems((current) => ({ ...current, [line.groupId]: event.target.value }))}
-                                        value={selectedId}
-                                      >
-                                        {line.candidates.length === 0 && (
-                                          <option value="">Select after confirming dietary fit</option>
-                                        )}
-                                        {options.map((item) => (
-                                          <option key={item.id} value={item.id}>
-                                            {item.name}{item.price !== null ? ` · ${formatPublishedPrice(item.price, item.currency)}` : ''}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                  ) : selectedItem ? (
-                                    <span>{selectedItem.name}</span>
-                                  ) : (
-                                    <span>No individual main was identified</span>
-                                  )}
-                                  {selectedItem?.price !== null && selectedItem?.price !== undefined && (
-                                    <small>Published price: {formatPublishedPrice(selectedItem.price, selectedItem.currency)} each</small>
-                                  )}
-                                  {line.reason && <small className="menu-group-warning">{line.reason} Choose only after direct confirmation.</small>}
-                                </div>
-                                <label className="menu-quantity">
-                                  <span className="sr-only">Quantity for {line.groupName}</span>
-                                  <input
-                                    min="0"
-                                    onChange={(event) => setDraftQuantities((current) => ({
-                                      ...current,
-                                      [line.groupId]: Math.max(0, Math.floor(Number(event.target.value) || 0)),
-                                    }))}
-                                    step="1"
-                                    type="number"
-                                    value={quantity}
-                                  />
-                                  <small>meals</small>
-                                </label>
-                                {line.requiresAllergenConfirmation && (
-                                  <p className="menu-allergen-warning">
-                                    Allergy ingredients and cross-contact are not stated. Call to confirm before ordering.
-                                  </p>
-                                )}
-                              </div>
-                            )
-                          })}
-                          <p className="menu-order-assumption">
-                            Suggestions follow the menu's listed order, not popularity or availability. Quantities assume one item per person; adjust portions and confirm with the business.
-                          </p>
-                        </div>
-                      )}
-                      <details className="published-menu-items">
-                        <summary>See {menuResult.items.length} menu item{menuResult.items.length === 1 ? '' : 's'} found</summary>
-                        <ul>
-                          {menuResult.items.map((item) => (
-                            <li key={item.id}>
-                              <strong>{item.name}</strong>
-                              {item.section && <span> · {item.section}</span>}
-                              {item.price !== null && <span> · {formatPublishedPrice(item.price, item.currency)}</span>}
-                              {item.description && <p>{item.description}</p>}
-                              {item.sourceType === 'visible_text' && <small>Read from visible menu text; confirm details with the restaurant.</small>}
-                              {item.suitableForDiet.length > 0 && (
-                                <small>Website labels: {item.suitableForDiet.join(', ')}</small>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    </>
-                  )}
-                </>
-              ) : isMenuScanCandidate && menuScanState === 'loading' ? (
-                <p className="menu-evidence__status"><LoaderCircle aria-hidden="true" className="menu-spinner" size={14} /> Checking the listed website for published menu data…</p>
-              ) : isMenuScanCandidate ? (
-                <p className="menu-evidence__status">No menu result for this listing. Open the business website or call.</p>
-              ) : (
-                <p className="menu-evidence__status">Not checked in this limited menu scan. Use the business website or call.</p>
-              )}
+              <div className="suggested-order-lines">
+                <ul>
+                  {suggestedOrderLines.map((line) => (
+                    <li key={line.id}>
+                      <span>{line.label}</span>
+                      <strong>{line.quantity} {line.unit}</strong>
+                      <small>{line.detail}</small>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </section>
           )}
           <a className="place-map-link" href={osmLink(place)} rel="noreferrer" target="_blank">
@@ -392,6 +179,13 @@ function PlaceRow({
         </div>
       </div>
     </article>
+  )
+}
+
+function rankFoodPlaces(places: FoodPlace[], scheduledTime: Date | null): FoodPlace[] {
+  return [...places].sort((a, b) =>
+    getAvailabilityRank(a.tags, scheduledTime) - getAvailabilityRank(b.tags, scheduledTime)
+      || a.distanceMiles - b.distanceMiles,
   )
 }
 
@@ -511,57 +305,7 @@ function GroupEditor({
   )
 }
 
-function Dialog({
-  title,
-  children,
-  onClose,
-}: {
-  title: string
-  children: ReactNode
-  onClose: () => void
-}) {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
-
-  return (
-    <div className="dialog-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose()
-    }}>
-      <section aria-labelledby="dialog-heading" aria-modal="true" className="dialog-panel" role="dialog">
-        <div className="dialog-heading">
-          <h2 id="dialog-heading">{title}</h2>
-          <button aria-label="Close dialog" className="icon-button" onClick={onClose} type="button"><X size={18} /></button>
-        </div>
-        {children}
-      </section>
-    </div>
-  )
-}
-
-function readLocalPlans(): StoredPlan[] {
-  const raw = window.localStorage.getItem('shelter-meal-planner-demo-plans')
-  if (!raw) return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) throw new Error('Saved demo plans are not in the expected format.')
-    return parsed as StoredPlan[]
-  } catch (error) {
-    console.error('Could not read locally saved demo plans.', error)
-    throw new Error('Saved plans could not be read. Clear the demo plans from this browser and try again.')
-  }
-}
-
-function saveLocalPlans(plans: StoredPlan[]) {
-  window.localStorage.setItem('shelter-meal-planner-demo-plans', JSON.stringify(plans))
-}
-
 function Planner() {
-  const { user, demoMode } = useAuth()
   const [address, setAddress] = useState('')
   const [mealTime, setMealTime] = useState(() => defaultMealTime())
   const [groups, setGroups] = useState<MealGroup[]>([{ ...createMealGroup('group-one'), name: 'Meal group 1' }])
@@ -569,27 +313,16 @@ function Planner() {
   const [radiusMiles, setRadiusMiles] = useState(5)
   const [busy, setBusy] = useState(false)
   const [places, setPlaces] = useState<FoodPlace[] | null>(null)
-  const [menuResults, setMenuResults] = useState<Record<string, MenuDiscoveryResult>>({})
-  const [menuScanCandidates, setMenuScanCandidates] = useState<string[]>([])
-  const [menuScanState, setMenuScanState] = useState<'idle' | 'loading' | 'complete' | 'error'>('idle')
-  const [menuScanError, setMenuScanError] = useState('')
   const [searchedAt, setSearchedAt] = useState<string | null>(null)
   const [dataTimestamp, setDataTimestamp] = useState<string | null>(null)
+  const [nearbyDataSource, setNearbyDataSource] = useState<'overpass' | 'photon' | null>(null)
   const [searchedFingerprint, setSearchedFingerprint] = useState<string | null>(null)
+  const [nearbySearchError, setNearbySearchError] = useState('')
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<ResultFilter>('restaurants')
   const [visiblePlaceCount, setVisiblePlaceCount] = useState(PLACE_PAGE_SIZE)
   const [groceryLines, setGroceryLines] = useState<GroceryLine[]>([])
-  const [checkedLines, setCheckedLines] = useState<string[]>([])
-  const [savedPlans, setSavedPlans] = useState<StoredPlan[]>([])
-  const [savedBusy, setSavedBusy] = useState(false)
-  const [notice, setNotice] = useState('')
-  const [sharePlan, setSharePlan] = useState<StoredPlan | null>(null)
-  const [shareEmail, setShareEmail] = useState('')
-  const [shareLink, setShareLink] = useState('')
-  const [shareLinks, setShareLinks] = useState<{ id: string; url: string }[]>([])
-  const [shareBusy, setShareBusy] = useState(false)
-  const [signOutError, setSignOutError] = useState('')
+  const resultsRef = useRef<HTMLElement | null>(null)
 
   const people = useMemo(() => totalPeople(groups), [groups])
   const scheduledTime = useMemo(() => createScheduleDate(mealTime), [mealTime])
@@ -600,13 +333,8 @@ function Planner() {
   const resultPlaces = useMemo(() => {
     if (!places) return []
     const category = filter === 'restaurants' ? 'restaurant' : 'grocery'
-    return rankFoodPlaces(
-      places.filter((place) => place.category === category),
-      scheduledTime,
-      groups,
-      menuResults,
-    )
-  }, [filter, groups, menuResults, places, scheduledTime])
+    return rankFoodPlaces(places.filter((place) => place.category === category), scheduledTime)
+  }, [filter, places, scheduledTime])
   const selectedPlaceCount = useMemo(
     () => (places ?? []).filter((place) => place.category === 'restaurant').length,
     [places],
@@ -617,75 +345,12 @@ function Planner() {
   )
 
   useEffect(() => {
-    let active = true
-    const load = demoMode
-      ? Promise.resolve().then(readLocalPlans)
-      : user
-        ? listMealPlans(user)
-        : Promise.resolve([])
-    void load.then((plans) => {
-      if (active) setSavedPlans(plans)
-    }).catch((loadError: unknown) => {
-      if (active) setError(messageFrom(loadError))
+    if (!places) return
+    resultsRef.current?.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      block: 'start',
     })
-    return () => { active = false }
-  }, [demoMode, user])
-
-  useEffect(() => {
-    if (!places || isSearchOutdated) return
-    const candidates = places.filter((place) => menuScanCandidates.includes(place.id))
-    if (candidates.length === 0) return
-    const controller = new AbortController()
-    void discoverMenus(candidates, controller.signal).then((results) => {
-      if (controller.signal.aborted) return
-      setMenuResults(Object.fromEntries(results.map((result) => [result.placeId, result])))
-      setMenuScanState('complete')
-    }).catch((scanError: unknown) => {
-      if (controller.signal.aborted) return
-      setMenuScanError(messageFrom(scanError))
-      setMenuScanState('error')
-    })
-    return () => controller.abort()
-  }, [isSearchOutdated, menuScanCandidates, places])
-
-  useEffect(() => {
-    if (!sharePlan || !user || demoMode) return
-    let active = true
-    void listMealPlanShareLinks(sharePlan.id, user).then((links) => {
-      if (active) setShareLinks(links)
-    }).catch((loadError: unknown) => {
-      if (active) setError(messageFrom(loadError))
-    })
-    return () => { active = false }
-  }, [demoMode, sharePlan, user])
-
-  useEffect(() => {
-    if (!user) return
-    const token = new URLSearchParams(window.location.search).get('share')
-    if (!token) return
-    let active = true
-    void claimMealPlanShareLink(token, user).then((plan) => {
-      if (!active) return
-      if (!plan) {
-        setError('This share link is no longer available.')
-        return
-      }
-      setSavedPlans((current) => current.some((saved) => saved.id === plan.id) ? current : [plan, ...current])
-      setNotice(`Shared plan opened: ${plan.title}`)
-      window.history.replaceState({}, document.title, window.location.pathname)
-    }).catch((claimError: unknown) => {
-      if (active) setError(messageFrom(claimError))
-    }).finally(() => {
-      if (active) setSavedBusy(false)
-    })
-    return () => { active = false }
-  }, [user])
-
-  useEffect(() => {
-    if (!notice) return
-    const timeout = window.setTimeout(() => setNotice(''), 5000)
-    return () => window.clearTimeout(timeout)
-  }, [notice])
+  }, [places])
 
   function updateGroup(id: string, next: MealGroup) {
     setGroups((current) => current.map((group) => group.id === id ? next : group))
@@ -693,7 +358,6 @@ function Planner() {
 
   async function performSearch(searchRadius = radiusMiles) {
     setError('')
-    setNotice('')
     setVisiblePlaceCount(PLACE_PAGE_SIZE)
     if (!isValidMealPlan(groups)) {
       setError('Enter at least one person and check that all meal-group counts are correct.')
@@ -705,12 +369,10 @@ function Planner() {
     }
     setBusy(true)
     setPlaces(null)
-    setMenuResults({})
-    setMenuScanCandidates([])
-    setMenuScanError('')
-    setMenuScanState('idle')
     setSearchedAt(null)
     setDataTimestamp(null)
+    setNearbyDataSource(null)
+    setNearbySearchError('')
     const requestAddress = address
     const requestGroups = groups.map((group) => ({ ...group }))
     const requestFingerprint = JSON.stringify({
@@ -721,28 +383,16 @@ function Planner() {
     })
     try {
       const result = await searchFoodPlaces(requestAddress, searchRadius)
-      const requestTime = createScheduleDate(mealTime)
-      const scanCandidates = rankFoodPlaces(
-        result.matches.filter((place) => place.category === 'restaurant'),
-        requestTime,
-        requestGroups,
-        {},
-      )
-        .slice(0, MENU_SCAN_LIMIT)
-      setMenuScanCandidates(scanCandidates.map((place) => place.id))
-      setMenuScanError('')
-      setMenuScanState(scanCandidates.length ? 'loading' : 'complete')
       setPlaces(result.matches)
       setSearchedAt(new Date().toISOString())
       setDataTimestamp(result.dataTimestamp)
+      setNearbyDataSource(result.dataSource)
+      setNearbySearchError(result.nearbyError ?? '')
       setSearchedFingerprint(requestFingerprint)
-      setGroceryLines(createGroceryLines(requestGroups).map((line) => {
-        const group = requestGroups.find((item) => item.id === line.groupId)
-        return group ? { ...line, label: `Complete meal for ${group.name || 'meal group'}` } : line
-      }))
-      setCheckedLines([])
+      setGroceryLines(createGroceryLines(requestGroups))
       setFilter('restaurants')
     } catch (searchError) {
+      setNearbySearchError('')
       setError(messageFrom(searchError))
     } finally {
       setBusy(false)
@@ -754,172 +404,6 @@ function Planner() {
     await performSearch()
   }
 
-  function makePlanData(): MealPlanData {
-    return {
-      title: `Meal plan · ${formatRequestedTime(mealTime)}`,
-      mealTime,
-      groups,
-      budget: parsedBudget,
-      radiusMiles,
-    }
-  }
-
-  async function savePlan() {
-    setError('')
-    setNotice('')
-    if (!isValidMealPlan(groups)) {
-      setError('Add at least one person before saving this plan.')
-      return
-    }
-    setSavedBusy(true)
-    try {
-      const data = makePlanData()
-      if (demoMode) {
-        const plan: StoredPlan = {
-          ...data,
-          id: createUniqueId(),
-          ownerUid: 'local-demo',
-          ownerEmail: 'This browser only',
-          sharedWith: [],
-        }
-        const updated = [plan, ...savedPlans]
-        saveLocalPlans(updated)
-        setSavedPlans(updated)
-      } else if (user) {
-        await saveMealPlan(data, user)
-        setSavedPlans(await listMealPlans(user))
-      } else {
-        throw new Error('Sign in to save this plan.')
-      }
-      setNotice('Plan saved without its shelter address.')
-    } catch (saveError) {
-      setError(messageFrom(saveError))
-    } finally {
-      setSavedBusy(false)
-    }
-  }
-
-  async function removePlan(plan: StoredPlan) {
-    const confirmed = window.confirm(`Delete "${plan.title}"? This cannot be undone.`)
-    if (!confirmed) return
-    setError('')
-    try {
-      if (demoMode) {
-        const updated = savedPlans.filter((item) => item.id !== plan.id)
-        saveLocalPlans(updated)
-        setSavedPlans(updated)
-      } else {
-        await deleteMealPlan(plan.id)
-        setSavedPlans(await listMealPlans(user!))
-      }
-      if (sharePlan?.id === plan.id) setSharePlan(null)
-      setNotice('Plan deleted.')
-    } catch (deleteError) {
-      setError(messageFrom(deleteError))
-    }
-  }
-
-  function reopenPlan(plan: StoredPlan) {
-    setGroups(plan.groups.map((group) => ({ ...group })))
-    setMealTime(plan.mealTime)
-    setBudgetText(plan.budget === null ? '' : String(plan.budget))
-    setRadiusMiles(plan.radiusMiles)
-    setAddress('')
-    setPlaces(null)
-    setMenuResults({})
-    setMenuScanCandidates([])
-    setMenuScanError('')
-    setMenuScanState('idle')
-    setSearchedAt(null)
-    setDataTimestamp(null)
-    setSearchedFingerprint(null)
-    setError('')
-    setNotice('Plan loaded. Re-enter the shelter address to search nearby; it is not saved in this plan.')
-    scrollToTop()
-  }
-
-  async function addEmailShare(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!sharePlan || !user) return
-    setShareBusy(true)
-    setError('')
-    try {
-      await shareMealPlanWithEmail(sharePlan.id, shareEmail)
-      setShareEmail('')
-      const updated = await listMealPlans(user)
-      setSavedPlans(updated)
-      setSharePlan(updated.find((plan) => plan.id === sharePlan.id) ?? sharePlan)
-      setNotice('Plan shared with that email address.')
-    } catch (shareError) {
-      setError(messageFrom(shareError))
-    } finally {
-      setShareBusy(false)
-    }
-  }
-
-  async function createShareLink() {
-    if (!sharePlan || !user) return
-    setShareBusy(true)
-    setError('')
-    try {
-      const link = await createMealPlanShareLink(sharePlan.id, user)
-      setShareLink(link)
-      try {
-        if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.')
-        await navigator.clipboard.writeText(link)
-        setNotice('Sign-in-required share link created and copied.')
-      } catch (clipboardError) {
-        console.warn('The share link was created but could not be copied automatically.', clipboardError)
-        setNotice('Share link created. Select and copy it below.')
-      }
-      setShareLinks(await listMealPlanShareLinks(sharePlan.id, user))
-    } catch (linkError) {
-      setError(messageFrom(linkError))
-    } finally {
-      setShareBusy(false)
-    }
-  }
-
-  async function revokeLink(token: string) {
-    if (!sharePlan) return
-    setError('')
-    try {
-      await revokeMealPlanShareLink(token)
-      setShareLinks((current) => current.filter((link) => link.id !== token))
-      if (shareLink.includes(token)) setShareLink('')
-      setNotice('Share link revoked.')
-    } catch (revokeError) {
-      setError(messageFrom(revokeError))
-    }
-  }
-
-  async function deleteShareEmail(email: string) {
-    if (!sharePlan || !user) return
-    try {
-      await removeMealPlanShare(sharePlan.id, email)
-      const updated = await listMealPlans(user)
-      setSavedPlans(updated)
-      setSharePlan(updated.find((plan) => plan.id === sharePlan.id) ?? sharePlan)
-      setNotice('Plan access removed.')
-    } catch (shareError) {
-      setError(messageFrom(shareError))
-    }
-  }
-
-  function loadSavedPlan(plan: StoredPlan) {
-    reopenPlan(plan)
-  }
-
-  async function leaveWorkspace() {
-    if (!auth) return
-    setSignOutError('')
-    try {
-      await signOut(auth)
-    } catch (signOutFailure) {
-      setSignOutError(messageFrom(signOutFailure))
-    }
-  }
-
   return (
     <div className="workspace">
       <aside className="side-rail">
@@ -928,56 +412,14 @@ function Planner() {
           <span className="brand-name">Shelter Meal<br />Planner</span>
         </a>
         <div className="rail-section">
-          <p className="rail-heading">Workspace</p>
+          <p className="rail-heading">Meal planning</p>
           <button className="rail-action is-current" type="button" onClick={() => {
             setPlaces(null)
             setError('')
             scrollToTop()
           }}>
-            <Plus size={16} /> New meal plan
+            <Plus size={16} /> Start a new search
           </button>
-          <p className="rail-heading saved-heading">Saved plans <span>{savedPlans.length}</span></p>
-          <div className="saved-list">
-            {savedPlans.length === 0 ? (
-              <p className="saved-empty">Plans you save will appear here.</p>
-            ) : savedPlans.map((plan) => (
-              <div className="saved-plan" key={plan.id}>
-                <button className="saved-plan__open" onClick={() => loadSavedPlan(plan)} type="button">
-                  <span>{plan.title}</span>
-                  <small>{totalPeople(plan.groups)} people</small>
-                </button>
-                {!demoMode && plan.ownerUid === user?.uid && (
-                  <button
-                    aria-label={`Share ${plan.title}`}
-                    className="saved-plan__share"
-                    onClick={() => {
-                      setSharePlan(plan)
-                      setShareLink('')
-                      setShareLinks([])
-                    }}
-                    type="button"
-                  ><Share2 size={15} /></button>
-                )}
-                {(demoMode || plan.ownerUid === user?.uid) && (
-                  <button
-                    aria-label={`Delete ${plan.title}`}
-                    className="saved-plan__delete"
-                    onClick={() => void removePlan(plan)}
-                    type="button"
-                  ><Trash2 size={15} /></button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="rail-footer">
-          <div className="rail-privacy"><LockKeyhole size={15} /><span>Addresses stay out of saved plans.</span></div>
-          <div className="rail-user">
-            <div className="user-avatar">{demoMode ? 'L' : user?.email?.slice(0, 1).toUpperCase()}</div>
-            <div><strong>{demoMode ? 'This browser' : user?.email}</strong><small>{demoMode ? 'Plans stay on this device' : 'Signed in'}</small></div>
-            {!demoMode && <button aria-label="Sign out" className="signout-button" onClick={() => void leaveWorkspace()} type="button">Sign out</button>}
-          </div>
-          {signOutError && <p className="signout-error" role="alert">{signOutError}</p>}
         </div>
       </aside>
 
@@ -986,28 +428,7 @@ function Planner() {
           <a className="brand-lockup" href="/" aria-label="Shelter Meal Planner home">
             <span className="brand-mark">SM</span><span className="brand-name">Shelter Meal Planner</span>
           </a>
-          <div className="mobile-header-actions">
-            <span className="pilot-badge">San Francisco</span>
-            <details className="mobile-saved">
-              <summary>Saved <span>{savedPlans.length}</span></summary>
-              <div className="mobile-saved-panel">
-                {savedPlans.length === 0 ? <p className="saved-empty">Saved plans will appear here.</p> : savedPlans.map((plan) => (
-                  <div className="mobile-saved-item" key={plan.id}>
-                    <button className="mobile-saved-open" onClick={() => loadSavedPlan(plan)} type="button">
-                      <strong>{plan.title}</strong><small>{totalPeople(plan.groups)} people</small>
-                    </button>
-                    {!demoMode && plan.ownerUid === user?.uid && <button aria-label={`Share ${plan.title}`} className="mobile-saved-action" onClick={() => {
-                      setSharePlan(plan)
-                      setShareLink('')
-                      setShareLinks([])
-                    }} type="button"><Share2 size={15} /></button>}
-                    {(demoMode || plan.ownerUid === user?.uid) && <button aria-label={`Delete ${plan.title}`} className="mobile-saved-action" onClick={() => void removePlan(plan)} type="button"><Trash2 size={15} /></button>}
-                  </div>
-                ))}
-                {!demoMode && <button className="mobile-signout" onClick={() => void leaveWorkspace()} type="button">Sign out</button>}
-              </div>
-            </details>
-          </div>
+          <span className="pilot-badge">San Francisco</span>
         </header>
         <div className="main-content">
           <div className="page-heading">
@@ -1016,27 +437,19 @@ function Planner() {
               <h1>Plan the next meal.</h1>
               <p className="page-subtitle">One address, a few needs, and a clear plan for the people waiting.</p>
             </div>
-            <div className={`connection-state ${demoMode ? 'connection-demo' : ''}`}>
+            <div className="connection-state">
               <span className="connection-dot" />
-              {demoMode ? 'Plans on this browser' : 'Private workspace'}
+              Ready to plan
             </div>
           </div>
 
-          {demoMode && (
-            <div className="demo-banner" role="status">
-              <ShieldCheck size={16} />
-              <span>Plans stay in this browser only. They do not sync, and older online plans are not imported.</span>
-            </div>
-          )}
-
-          {notice && <div className="notice-banner" role="status"><Check size={17} />{notice}<button aria-label="Dismiss message" onClick={() => setNotice('')} type="button"><X size={15} /></button></div>}
           {error && <div className="error-banner" role="alert"><AlertTriangle size={17} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')} type="button"><X size={15} /></button></div>}
 
           <form className="planning-form" onSubmit={(event) => void search(event)}>
             <section className="location-section" aria-labelledby="location-heading">
               <div className="section-heading">
                 <span className="section-icon"><MapPin size={17} /></span>
-                <div><h2 id="location-heading">Where should food go?</h2><p>We send the address to OpenStreetMap to find nearby businesses; it is not saved with your meal plan.</p></div>
+                <div><h2 id="location-heading">Where should food go?</h2><p>We send the address to OpenStreetMap to find nearby businesses; the planner does not store it.</p></div>
               </div>
               <label className="address-label" htmlFor="shelter-address">Shelter delivery address</label>
               <div className="address-control">
@@ -1101,9 +514,7 @@ function Planner() {
             </section>
 
             <div className="form-footer">
-              <div className="privacy-inline"><ShieldCheck size={16} /><span>Names and shelter addresses are never part of a saved plan.</span></div>
               <div className="form-actions">
-                {places && <button className="button-secondary" disabled={savedBusy || isSearchOutdated} onClick={() => void savePlan()} type="button"><ListChecks size={16} />{savedBusy ? 'Saving…' : 'Save plan'}</button>}
                 <button className="button-primary search-button" disabled={busy || !address.trim()} type="submit">
                   {busy ? <LoaderCircle className="spinner" size={17} /> : <Search size={17} />}
                   {busy ? 'Searching nearby…' : 'Find nearby food'}
@@ -1113,12 +524,12 @@ function Planner() {
           </form>
 
           {places && (
-            <section className="results-section" aria-labelledby="results-heading">
+            <section className="results-section" aria-labelledby="results-heading" ref={resultsRef}>
               <div className="results-top">
                 <div>
-                  <p className="result-kicker"><span className="result-pulse" /> Search complete</p>
+                  <p className={`result-kicker ${nearbySearchError ? 'result-kicker--warning' : ''}`}><span className="result-pulse" /> {nearbySearchError ? 'Business listings unavailable' : 'Search complete'}</p>
                   <h2 id="results-heading">Nearby options</h2>
-                  <p className="results-caption">Within {radiusMiles} miles of the address you searched. Hours refer to {formatRequestedTime(mealTime)}; confirm timing, delivery, menu, and requirements with each business.</p>
+                  <p className="results-caption">{nearbySearchError ? filter === 'groceries' ? 'Use the shopping list below at any grocery store. Store locations and stock could not be checked.' : 'Select Grocery stores for a ready-to-eat shopping list. Store locations and stock could not be checked.' : `Within ${radiusMiles} miles of the address you searched. Hours refer to ${formatRequestedTime(mealTime)}; confirm timing, delivery, menu, and requirements with each business.`}</p>
                 </div>
                 <button className="text-button" onClick={() => {
                   setPlaces(null)
@@ -1131,7 +542,7 @@ function Planner() {
                   <AlertTriangle size={18} />
                   <div>
                     <strong>Meal needs or search details changed.</strong>
-                    <span>Run the search again before using these business listings or the grocery checklist.</span>
+                    <span>Run the search again before using these business listings or the grocery list.</span>
                   </div>
                   <button className="button-primary" disabled={busy} onClick={() => void performSearch()} type="button">
                     <Search size={15} />Update search
@@ -1139,13 +550,24 @@ function Planner() {
                 </div>
               ) : (
                 <>
+              {nearbySearchError && (
+                <div className="nearby-error-banner" role="status">
+                  <AlertTriangle size={17} />
+                  <span>{nearbySearchError}</span>
+                  <a href="#shopping-heading" onClick={() => setFilter('groceries')}>Go to grocery list</a>
+                </div>
+              )}
               <div className="results-meta">
-                <span>OpenStreetMap community data</span>
+                <span>{nearbyDataSource === 'photon' ? 'OpenStreetMap data via Photon' : 'OpenStreetMap community data'}</span>
                 <span>
-                  {dataTimestamp
-                    ? `OpenStreetMap snapshot ${formatOsmSnapshot(dataTimestamp)} UTC`
-                    : 'OpenStreetMap snapshot time unavailable'}
-                  {searchedAt && ` · Searched ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' }).format(new Date(searchedAt))} San Francisco time`}
+                  {nearbySearchError
+                    ? 'Live business locations are unavailable'
+                  : nearbyDataSource === 'photon'
+                    ? 'OpenStreetMap data via Photon; snapshot time unavailable'
+                    : dataTimestamp
+                      ? `OpenStreetMap snapshot ${formatOsmSnapshot(dataTimestamp)} UTC`
+                      : 'OpenStreetMap snapshot time unavailable'}
+                  {!nearbySearchError && searchedAt && ` · Searched ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' }).format(new Date(searchedAt))} San Francisco time`}
                 </span>
               </div>
 
@@ -1160,30 +582,42 @@ function Planner() {
                   setFilter('groceries')
                   setVisiblePlaceCount(PLACE_PAGE_SIZE)
                 }} role="tab" type="button">
-                  <ShoppingBasket size={16} /> Grocery stores <span>{groceryPlaceCount}</span>
+                  <ShoppingBasket size={16} /> Grocery stores <span>{nearbySearchError ? '—' : groceryPlaceCount}</span>
                 </button>
               </div>
 
+              {filter === 'groceries' && (
+                <section className="shopping-section" aria-labelledby="shopping-heading">
+                  <div className="shopping-heading">
+                    <div className="section-icon"><ShoppingBasket size={17} /></div>
+                    <div><h2 id="shopping-heading">Grocery shopping list</h2><p>Ready-to-eat items for {people} {people === 1 ? 'person' : 'people'}; no kitchen needed.</p></div>
+                  </div>
+                  <p className="grocery-warning">Store locations and stock are not verified. Check ingredient labels and ask about cross-contact for dietary needs.</p>
+                  <div className="suggested-order-lines">
+                    {groceryLines.length > 0 ? (
+                      <ul>
+                        {groceryLines.map((line) => (
+                          <li key={line.id}>
+                            <span>{line.label}</span>
+                            <strong>{line.quantity} {line.unit}</strong>
+                            <small>{line.detail}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="empty-grocery-list">Add people to meal groups to create a grocery list.</p>
+                    )}
+                  </div>
+                </section>
+              )}
+
               {resultPlaces.length > 0 ? (
                 <>
-                  {filter === 'restaurants' && (
-                    <div className="menu-scan-note" role="status">
-                      <ListChecks aria-hidden="true" size={16} />
-                      <p>
-                        {menuScanError
-                          ? `${menuScanError} Open the listed business website or call.`
-                          : `Checking up to ${MENU_SCAN_LIMIT} listed restaurant websites. Results prioritize mapped open status and delivery evidence, then distance, then menu fit. Only public structured menu data is read; menu pages may not provide current items or dietary evidence.`}
-                      </p>
-                    </div>
-                  )}
                   <div aria-live="polite" className="place-list">
                     {resultPlaces.slice(0, visiblePlaceCount).map((place) => (
                       <PlaceRow
                         groups={groups}
-                        isMenuScanCandidate={menuScanCandidates.includes(place.id)}
                         key={place.id}
-                        menuResult={menuResults[place.id]}
-                        menuScanState={menuScanState}
                         place={place}
                         scheduledTime={scheduledTime}
                       />
@@ -1199,38 +633,18 @@ function Planner() {
               ) : (
                 <div className="empty-results">
                   <div className="empty-results__icon">{filter === 'restaurants' ? <Utensils size={22} /> : <Store size={22} />}</div>
-                  <h3>No {filter === 'restaurants' ? 'restaurant' : 'grocery store'} listings found in this radius.</h3>
-                  <p>Try expanding the search area. OpenStreetMap coverage varies by neighborhood.</p>
-                  {radiusMiles < 15 ? <button className="button-secondary" onClick={() => {
+                  <h3>{nearbySearchError ? 'Business locations could not be loaded.' : `No ${filter === 'restaurants' ? 'restaurant' : 'grocery store'} listings found in this radius.`}</h3>
+                  <p>{nearbySearchError ? 'You can still buy the ready-to-eat items in the Grocery stores tab at any grocery store.' : 'Try expanding the search area. OpenStreetMap coverage varies by neighborhood.'}</p>
+                  {nearbySearchError
+                    ? <a className="button-secondary" href="#shopping-heading" onClick={() => setFilter('groceries')}>Use the grocery list</a>
+                    : radiusMiles < 15 ? <button className="button-secondary" onClick={() => {
                     const nextRadius = Math.min(15, radiusMiles + 5)
                     setRadiusMiles(nextRadius)
                     void performSearch(nextRadius)
                   }} type="button">Expand to {Math.min(15, radiusMiles + 5)} miles and search</button> : <p className="radius-limit">The maximum 15-mile search radius is in use.</p>}
                 </div>
               )}
-              <p className="attribution">Map data © <a href="https://www.openstreetmap.org/copyright" rel="noreferrer" target="_blank">OpenStreetMap contributors</a>. Listed hours and delivery details may be incomplete or out of date.</p>
-
-              <section className="shopping-section" aria-labelledby="shopping-heading">
-                <div className="shopping-heading">
-                  <div className="section-icon"><ShoppingBasket size={17} /></div>
-                  <div><h2 id="shopping-heading">Grocery fallback checklist</h2><p>Use this if restaurant options cannot cover the group.</p></div>
-                </div>
-                <div className="grocery-warning"><AlertTriangle size={16} /><span>Stores and inventory are not verified. This checklist counts meal units by group; confirm product labels, stock, and allergy/cross-contact information in person.</span></div>
-                <div className="grocery-lines">
-                  {groceryLines.map((line) => (
-                    <div className={`grocery-line ${checkedLines.includes(line.id) ? 'is-checked' : ''}`} key={line.id}>
-                      <label className="grocery-check">
-                        <input checked={checkedLines.includes(line.id)} onChange={(event) => setCheckedLines((current) => event.target.checked ? [...current, line.id] : current.filter((id) => id !== line.id))} type="checkbox" />
-                        <span className="checkmark"><Check size={13} /></span>
-                      </label>
-                      <div className="grocery-copy"><strong>{line.label}</strong><span>{line.detail}</span></div>
-                      <label className="quantity-input"><span className="sr-only">Number of meals for {line.label}</span><input min="0" onChange={(event) => setGroceryLines((current) => current.map((item) => item.id === line.id ? { ...item, quantity: Math.max(0, Number(event.target.value)) } : item))} type="number" value={line.quantity} /><small>meals</small></label>
-                    </div>
-                  ))}
-                  {groceryLines.length === 0 && <p className="saved-empty">Add people to meal groups to create a grocery checklist.</p>}
-                </div>
-                <p className="grocery-total">Total meal units to confirm <strong>{groceryLines.reduce((sum, line) => sum + line.quantity, 0)}</strong></p>
-              </section>
+              {!nearbySearchError && <p className="attribution">Map data © <a href="https://www.openstreetmap.org/copyright" rel="noreferrer" target="_blank">OpenStreetMap contributors</a>. Listed hours and delivery details may be incomplete or out of date.</p>}
                 </>
               )}
             </section>
@@ -1244,31 +658,6 @@ function Planner() {
         </div>
       </main>
 
-      {sharePlan && user && (
-        <Dialog onClose={() => setSharePlan(null)} title="Share this meal plan">
-          <p className="dialog-intro">The plan stays private unless you add a volunteer. The shelter address is not included.</p>
-          <form className="share-form" onSubmit={(event) => void addEmailShare(event)}>
-            <label htmlFor="share-email">Share with an email address</label>
-            <div className="share-email-row"><input id="share-email" onChange={(event) => setShareEmail(event.target.value)} placeholder="volunteer@example.org" required type="email" value={shareEmail} /><button className="button-primary" disabled={shareBusy} type="submit"><Mail size={15} />Share</button></div>
-          </form>
-          {sharePlan.sharedWith.length > 0 && (
-            <div className="shared-list"><h3>Has access</h3>{sharePlan.sharedWith.map((email) => <div className="shared-person" key={email}><span>{email}</span><button className="text-button danger-text" onClick={() => void deleteShareEmail(email)} type="button">Remove</button></div>)}</div>
-          )}
-          <div className="share-link-area">
-            <h3>Sign-in-required link</h3>
-            <p>Anyone with the link must sign in with a verified email. You can revoke active links here.</p>
-            <button className="button-secondary" disabled={shareBusy} onClick={() => void createShareLink()} type="button"><Share2 size={16} />Create and copy link</button>
-            {shareLink && <div className="share-link-copy"><input aria-label="Share link" readOnly value={shareLink} /><span><Check size={14} />Copied</span></div>}
-            {shareLinks.map((link) => (
-              <div className="share-link-copy" key={link.id}>
-                <input aria-label="Active share link" readOnly value={link.url} />
-                <button className="text-button danger-text" onClick={() => void revokeLink(link.id)} type="button">Revoke</button>
-              </div>
-            ))}
-          </div>
-          <p className="dialog-footnote"><LockKeyhole size={14} /> Only share with people who need this plan.</p>
-        </Dialog>
-      )}
     </div>
   )
 }
@@ -1278,11 +667,7 @@ function UsersIcon() {
 }
 
 function App() {
-  return (
-    <AuthGate>
-      <Planner />
-    </AuthGate>
-  )
+  return <Planner />
 }
 
 export default App

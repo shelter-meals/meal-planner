@@ -30,7 +30,18 @@ const MAX_ROBOTS_BYTES = 50_000
 const MAX_FETCH_MS = 4_000
 const MAX_MENU_LINKS = 3
 const MAX_OVERPASS_BYTES = 3_000_000
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
+const OVERPASS_TIMEOUT_MS = 12_000
+const PHOTON_TIMEOUT_MS = 6_000
+const OVERPASS_URLS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+]
+const PHOTON_URL = 'https://photon.komoot.io/reverse'
+const PHOTON_TAG_GROUPS = [
+  ['amenity:restaurant', 'amenity:fast_food', 'amenity:cafe', 'amenity:food_court'],
+  ['shop:supermarket', 'shop:convenience'],
+]
 const USER_AGENT = 'ShelterMealPlanner'
 const SCAN_MESSAGE = 'No menu items were visible in the website pages this scan could read. The menu may be in a PDF, an interactive viewer, or a separate ordering service. Open the business website or call to choose dishes.'
 
@@ -38,6 +49,17 @@ interface NearbySearchRequest {
   lat: number
   lon: number
   radiusMiles: 5 | 10 | 15
+}
+
+interface PhotonFeature {
+  geometry?: { coordinates?: unknown }
+  properties?: {
+    name?: unknown
+    osm_id?: unknown
+    osm_key?: unknown
+    osm_type?: unknown
+    osm_value?: unknown
+  }
 }
 
 class ScanFailure extends Error {
@@ -415,6 +437,50 @@ function parseNearbySearchRequest(body: unknown): NearbySearchRequest | null {
   }
 }
 
+async function fetchPhotonFeatures(
+  search: NearbySearchRequest,
+  tags: string[],
+): Promise<PhotonFeature[] | null> {
+  const url = new URL(PHOTON_URL)
+  url.searchParams.set('lat', String(search.lat))
+  url.searchParams.set('lon', String(search.lon))
+  url.searchParams.set('radius', String(search.radiusMiles * 1.609344))
+  url.searchParams.set('limit', '50')
+  for (const tag of tags) url.searchParams.append('osm_tag', tag)
+
+  let response: Response
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: 'application/geo+json, application/json',
+        'User-Agent': `${USER_AGENT}/0.1`,
+      },
+      signal: AbortSignal.timeout(PHOTON_TIMEOUT_MS),
+    })
+  } catch {
+    console.warn('Photon nearby search failed before receiving a response.')
+    return null
+  }
+  if (!response.ok) {
+    console.warn('Photon nearby search returned an error.', response.status)
+    return null
+  }
+
+  let data: unknown
+  try {
+    data = JSON.parse(await readTextLimited(response, MAX_OVERPASS_BYTES)) as unknown
+  } catch {
+    console.warn('Photon nearby search returned unreadable or oversized data.')
+    return null
+  }
+  if (!data || typeof data !== 'object'
+    || !Array.isArray((data as { features?: unknown }).features)) {
+    console.warn('Photon nearby search response did not contain map features.')
+    return null
+  }
+  return (data as { features: PhotonFeature[] }).features
+}
+
 async function handleNearbyFoodSearch(request: Request, environment: Environment): Promise<Response> {
   const origin = request.headers.get('Origin')
   if (request.method === 'OPTIONS') {
@@ -443,44 +509,107 @@ async function handleNearbyFoodSearch(request: Request, environment: Environment
   }
   const radiusMeters = Math.round(search.radiusMiles * 1609.344)
   const query = `
-    [out:json][timeout:25];
+    [out:json][timeout:15];
     (
-      nwr(around:${radiusMeters},${search.lat},${search.lon})["amenity"~"^(restaurant|fast_food|cafe|food_court)$"];
-      nwr(around:${radiusMeters},${search.lat},${search.lon})["shop"~"^(supermarket|convenience|butcher|deli|health_food|greengrocer)$"];
+      nwr(around:${radiusMeters},${search.lat},${search.lon})["amenity"~"^(restaurant|fast_food|cafe|food_court)$"]["name"];
+      nwr(around:${radiusMeters},${search.lat},${search.lon})["shop"~"^(supermarket|convenience)$"]["name"];
     );
     out center tags;
   `
-  let upstream: Response
-  try {
-    upstream = await fetch(OVERPASS_URL, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        'User-Agent': `${USER_AGENT}/0.1`,
+  for (const endpoint of OVERPASS_URLS) {
+    let upstream: Response
+    try {
+      upstream = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          'User-Agent': `${USER_AGENT}/0.1`,
+        },
+        body: new URLSearchParams({ data: query }),
+        signal: AbortSignal.timeout(OVERPASS_TIMEOUT_MS),
+      })
+    } catch {
+      console.warn('Overpass request failed before receiving a response.', new URL(endpoint).hostname)
+      continue
+    }
+    if (!upstream.ok) {
+      console.warn('Overpass server returned an error.', new URL(endpoint).hostname, upstream.status)
+      continue
+    }
+
+    let data: unknown
+    try {
+      data = JSON.parse(await readTextLimited(upstream, MAX_OVERPASS_BYTES)) as unknown
+    } catch {
+      console.warn('Overpass server returned unreadable or oversized data.', new URL(endpoint).hostname)
+      continue
+    }
+    if (!data || typeof data !== 'object' || !Array.isArray((data as { elements?: unknown }).elements)) {
+      console.warn('Overpass server response did not contain map elements.', new URL(endpoint).hostname)
+      continue
+    }
+    const response = data as { elements: unknown[]; osm3s?: { timestamp_osm_base?: string } }
+    if (typeof response.osm3s?.timestamp_osm_base !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(response.osm3s.timestamp_osm_base)
+      || !Number.isFinite(Date.parse(response.osm3s.timestamp_osm_base))) {
+      console.warn('Overpass server returned invalid snapshot metadata.', new URL(endpoint).hostname)
+      continue
+    }
+    return jsonResponse({
+      elements: response.elements,
+      osm3s: response.osm3s,
+      source: 'overpass',
+    }, 200, origin, environment)
+  }
+
+  const featureGroups = await Promise.all(
+    PHOTON_TAG_GROUPS.map((tags) => fetchPhotonFeatures(search, tags)),
+  )
+  if (featureGroups.some((features) => features === null)) {
+    return jsonResponse({
+      error: 'OpenStreetMap nearby search servers are temporarily unavailable. Try again shortly.',
+    }, 503, origin, environment)
+  }
+
+  const features = featureGroups.flatMap((group) => group ?? [])
+  const elements = features.flatMap((feature) => {
+    if (!feature || typeof feature !== 'object') return []
+    const properties = feature.properties
+    const coordinates = feature.geometry?.coordinates
+    if (!properties || typeof properties.name !== 'string' || !properties.name.trim()
+      || typeof properties.osm_id !== 'number' || !Number.isInteger(properties.osm_id)
+      || (properties.osm_type !== 'N' && properties.osm_type !== 'W' && properties.osm_type !== 'R')
+      || typeof properties.osm_value !== 'string'
+      || (properties.osm_key !== 'amenity' && properties.osm_key !== 'shop')
+      || (properties.osm_key === 'amenity'
+        && !['restaurant', 'fast_food', 'cafe', 'food_court'].includes(properties.osm_value))
+      || (properties.osm_key === 'shop'
+        && !['supermarket', 'convenience']
+          .includes(properties.osm_value))
+      || !Array.isArray(coordinates) || coordinates.length < 2
+      || typeof coordinates[0] !== 'number' || !Number.isFinite(coordinates[0])
+      || coordinates[0] < -180 || coordinates[0] > 180
+      || typeof coordinates[1] !== 'number' || !Number.isFinite(coordinates[1])
+      || coordinates[1] < -90 || coordinates[1] > 90) {
+      return []
+    }
+
+    return [{
+      type: properties.osm_type === 'N' ? 'node' : properties.osm_type === 'W' ? 'way' : 'relation',
+      id: properties.osm_id,
+      lon: coordinates[0],
+      lat: coordinates[1],
+      tags: {
+        name: properties.name.trim(),
+        [properties.osm_key]: properties.osm_value,
       },
-      body: new URLSearchParams({ data: query }),
-      signal: AbortSignal.timeout(30_000),
-    })
-  } catch {
-    return jsonResponse({ error: 'OpenStreetMap nearby search could not be reached. Try again shortly.' }, 503, origin, environment)
-  }
-  if (!upstream.ok) {
-    return jsonResponse({ error: `OpenStreetMap nearby search is temporarily unavailable (${upstream.status}). Try again shortly.` }, 503, origin, environment)
-  }
-  let data: unknown
-  try {
-    data = JSON.parse(await readTextLimited(upstream, MAX_OVERPASS_BYTES)) as unknown
-  } catch {
-    return jsonResponse({ error: 'OpenStreetMap returned an unreadable nearby-search response.' }, 502, origin, environment)
-  }
-  if (!data || typeof data !== 'object' || !Array.isArray((data as { elements?: unknown }).elements)) {
-    return jsonResponse({ error: 'OpenStreetMap returned an invalid nearby-search response.' }, 502, origin, environment)
-  }
-  const response = data as { elements: unknown[]; osm3s?: { timestamp_osm_base?: string } }
+    }]
+  })
+
   return jsonResponse({
-    elements: response.elements,
-    osm3s: response.osm3s,
+    elements,
+    source: 'photon',
   }, 200, origin, environment)
 }
 

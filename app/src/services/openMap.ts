@@ -19,6 +19,7 @@ interface OverpassElement {
 interface OverpassResponse {
   elements: OverpassElement[]
   osm3s?: { timestamp_osm_base?: string }
+  source?: 'overpass' | 'photon'
 }
 
 export interface PlaceSearchResult {
@@ -26,6 +27,8 @@ export interface PlaceSearchResult {
   searchedAddress: string
   searchPoint: { lat: number; lon: number }
   dataTimestamp: string | null
+  dataSource: 'overpass' | 'photon' | null
+  nearbyError: string | null
 }
 
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search'
@@ -34,12 +37,9 @@ const nearbyApiUrl = configuredNearbyApiUrl || (import.meta.env.DEV ? '/api/near
 const GROCERY_SHOPS = new Set([
   'supermarket',
   'convenience',
-  'butcher',
-  'deli',
-  'health_food',
-  'greengrocer',
 ])
-const NON_FOOD_SHOPS = new Set(['alcohol', 'beverages', 'gas', 'liquor', 'tobacco', 'vape'])
+const NON_GROCERY_STORE_NAME = /\b(?:liquor|wine|spirits|butcher(?:s|['’]s)?|car\s*wash|tobacco|smoke(?:\s*shop)?|vape|gas(?:oline)?|fuel|gift(?:\s*shop)?|snack(?:\s*shop)?)\b|^(?:shell|chevron|exxon|mobil|arco|valero|bp|76)\b/i
+const NON_MEAL_PLACE_DESCRIPTION = /\b(coffee|tea|boba|bubble\s*tea|cafe|caf[eé])\b/i
 let lastGeocodingRequest = 0
 
 function distanceMiles(from: { lat: number; lon: number }, to: { lat: number; lon: number }): number {
@@ -55,8 +55,9 @@ export function isGroceryStore(tags: Record<string, string>): boolean {
   const hasFuelTags = Object.keys(tags).some((key) => key === 'fuel' || key.startsWith('fuel:'))
   return GROCERY_SHOPS.has(tags.shop ?? '')
     && tags.amenity !== 'fuel'
-    && !NON_FOOD_SHOPS.has(tags.shop ?? '')
+    && tags.amenity !== 'car_wash'
     && !hasFuelTags
+    && !NON_GROCERY_STORE_NAME.test(tags.name ?? '')
 }
 
 function mapPlace(element: OverpassElement, point: { lat: number; lon: number }): FoodPlace | null {
@@ -71,19 +72,15 @@ function mapPlace(element: OverpassElement, point: { lat: number; lon: number })
   const groceryStore = isGroceryStore(tags)
   const foodAmenity = ['restaurant', 'fast_food', 'cafe', 'food_court'].includes(amenity ?? '')
   if (!groceryStore && !foodAmenity) return null
+  if (!groceryStore && (
+    amenity === 'cafe'
+    || NON_MEAL_PLACE_DESCRIPTION.test(`${name} ${tags.cuisine ?? ''} ${tags.description ?? ''}`)
+  )) return null
   const category = groceryStore ? 'grocery' : 'restaurant'
   const typeLabel = groceryStore
     ? shop === 'supermarket'
       ? 'Supermarket'
-      : shop === 'convenience'
-        ? 'Convenience store'
-        : shop === 'butcher'
-          ? 'Butcher'
-          : shop === 'deli'
-            ? 'Deli'
-            : shop === 'health_food'
-              ? 'Health food store'
-              : 'Greengrocer'
+      : 'Convenience store'
     : amenity === 'fast_food'
     ? 'Fast food'
     : amenity === 'food_court'
@@ -134,8 +131,17 @@ export async function searchFoodPlaces(address: string, radiusMiles: number): Pr
     throw new Error('Address lookup returned an invalid location. Check the address and try again.')
   }
 
+  const nearbyFailure = (message: string): PlaceSearchResult => ({
+    matches: [],
+    searchedAddress: geocodingResult.display_name,
+    searchPoint: point,
+    dataTimestamp: null,
+    dataSource: null,
+    nearbyError: message,
+  })
+
   if (!nearbyApiUrl) {
-    throw new Error('Nearby business search is not configured for this hosted app yet.')
+    return nearbyFailure('Nearby business search is not configured for this hosted app.')
   }
 
   let response: Response
@@ -147,21 +153,21 @@ export async function searchFoodPlaces(address: string, radiusMiles: number): Pr
     })
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new Error('Nearby business search could not reach the OpenStreetMap service. Check your connection and try again.')
+      return nearbyFailure('Nearby business search could not reach OpenStreetMap. Store locations could not be verified.')
     }
     throw error
   }
   if (!response.ok) {
-    throw new Error(`Nearby business search is unavailable right now (${response.status}). Try again later.`)
+    return nearbyFailure(`Nearby business search is unavailable right now (${response.status}). Store locations could not be verified.`)
   }
   let data: OverpassResponse
   try {
     data = (await response.json()) as OverpassResponse
   } catch {
-    throw new Error('Nearby business search returned an unreadable response. Try again later.')
+    return nearbyFailure('Nearby business search returned an unreadable response. Store locations could not be verified.')
   }
   if (!Array.isArray(data.elements)) {
-    throw new Error('Nearby business search returned an invalid response. Try again later.')
+    return nearbyFailure('Nearby business search returned an invalid response. Store locations could not be verified.')
   }
   const matches = data.elements
     .map((element) => mapPlace(element, point))
@@ -172,6 +178,8 @@ export async function searchFoodPlaces(address: string, radiusMiles: number): Pr
     searchedAddress: geocodingResult.display_name,
     searchPoint: point,
     dataTimestamp: data.osm3s?.timestamp_osm_base ?? null,
+    dataSource: data.source ?? 'overpass',
+    nearbyError: null,
   }
 }
 

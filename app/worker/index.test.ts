@@ -49,6 +49,7 @@ describe('nearby OpenStreetMap proxy', () => {
       expect(init?.headers).toMatchObject({ 'User-Agent': 'ShelterMealPlanner/0.1' })
       const body = init?.body as URLSearchParams
       expect(body.get('data')).toContain('around:8047,37.7729681,-122.4214546')
+      expect(body.get('data')).toContain('[out:json][timeout:15]')
       return new Response(JSON.stringify({
         elements: [{ type: 'node', id: 123, lat: 37.77, lon: -122.42, tags: { name: 'Cafe' } }],
         osm3s: { timestamp_osm_base: '2026-10-09T00:00:00Z' },
@@ -69,14 +70,172 @@ describe('nearby OpenStreetMap proxy', () => {
   })
 
   it('reports upstream unavailability as a service error', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('Unavailable', { status: 429 })))
+    const fetch = vi.fn(async () => new Response('Unavailable', { status: 429 }))
+    vi.stubGlobal('fetch', fetch)
     const response = await handleMenuDiscovery(nearbyRequest({
       lat: 37.77,
       lon: -122.42,
       radiusMiles: 10,
     }), environment)
     expect(response.status).toBe(503)
-    expect(await response.json()).toMatchObject({ error: expect.stringContaining('(429)') })
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining('servers are temporarily unavailable'),
+    })
+    expect(fetch).toHaveBeenCalledTimes(5)
+  })
+
+  it('uses the secondary Overpass server when the primary is unavailable', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === 'https://overpass-api.de/api/interpreter') {
+        return new Response('Unavailable', { status: 504 })
+      }
+      expect(String(input)).toBe('https://overpass.private.coffee/api/interpreter')
+      return new Response(JSON.stringify({
+        elements: [{ type: 'node', id: 456, lat: 37.77, lon: -122.42, tags: { name: 'Fallback Cafe' } }],
+        osm3s: { timestamp_osm_base: '2026-10-09T00:00:00Z' },
+      }), { headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(nearbyRequest({
+      lat: 37.7729681,
+      lon: -122.4214546,
+      radiusMiles: 5,
+    }), environment)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      elements: [{ id: 456, tags: { name: 'Fallback Cafe' } }],
+    })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips successful responses with invalid OpenStreetMap timestamps', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/reverse') {
+        const grocerySearch = url.searchParams.getAll('osm_tag').some((tag) => tag.startsWith('shop:'))
+        return new Response(JSON.stringify({
+          features: grocerySearch ? [] : [{
+            geometry: { coordinates: [-122.42, 37.77] },
+            properties: {
+              name: 'Photon Fallback',
+              osm_id: 789,
+              osm_key: 'amenity',
+              osm_type: 'N',
+              osm_value: 'restaurant',
+            },
+          }],
+        }), { headers: { 'Content-Type': 'application/geo+json' } })
+      }
+      return new Response(JSON.stringify({
+        elements: [],
+        osm3s: { timestamp_osm_base: '117609' },
+      }), { headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(nearbyRequest({
+      lat: 37.7729681,
+      lon: -122.4214546,
+      radiusMiles: 5,
+    }), environment)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      elements: [{ id: 789, tags: { name: 'Photon Fallback' } }],
+      source: 'photon',
+    })
+    expect(fetch).toHaveBeenCalledTimes(5)
+  })
+
+  it('does not return malformed map data as an empty successful search', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      elements: [],
+      osm3s: { timestamp_osm_base: '117608' },
+    }), { headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(nearbyRequest({
+      lat: 37.77,
+      lon: -122.42,
+      radiusMiles: 5,
+    }), environment)
+    expect(response.status).toBe(503)
+    expect(fetch).toHaveBeenCalledTimes(5)
+  })
+
+  it('requests only named listings that can be displayed', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const queryBody = init?.body
+      const query = queryBody instanceof URLSearchParams ? queryBody.get('data') ?? '' : ''
+      expect(query).toContain('["amenity"~"^(restaurant|fast_food|cafe|food_court)$"]["name"]')
+      expect(query).toContain('["shop"~"^(supermarket|convenience)$"]["name"]')
+      expect(query).not.toContain('butcher')
+      expect(query).not.toContain('liquor')
+      expect(query).not.toContain('car_wash')
+      return new Response(JSON.stringify({
+        elements: [],
+        osm3s: { timestamp_osm_base: '2026-10-09T00:00:00Z' },
+      }), { headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(nearbyRequest({
+      lat: 37.7729681,
+      lon: -122.4214546,
+      radiusMiles: 5,
+    }), environment)
+    expect(response.status).toBe(200)
+  })
+
+  it('searches restaurants and grocery stores separately in the Photon fallback', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === 'photon.komoot.io') {
+        expect(url.pathname).toBe('/reverse')
+        expect(url.searchParams.get('radius')).toBe('8.04672')
+        expect(url.searchParams.get('limit')).toBe('50')
+        const tags = url.searchParams.getAll('osm_tag')
+        const grocerySearch = tags.includes('shop:supermarket')
+        expect(tags.every((tag) => tag.startsWith(grocerySearch ? 'shop:' : 'amenity:'))).toBe(true)
+        const features = grocerySearch
+          ? Array.from({ length: 5 }, (_, index) => ({
+            geometry: { coordinates: [-122.4213, 37.7731] },
+            properties: {
+              name: `Market ${index}`,
+              osm_id: 987 + index,
+              osm_key: 'shop',
+              osm_type: 'N',
+              osm_value: 'supermarket',
+            },
+          }))
+          : Array.from({ length: 50 }, (_, index) => ({
+            geometry: { coordinates: [-122.4213, 37.7731] },
+            properties: {
+              name: `Restaurant ${index}`,
+              osm_id: index + 1,
+              osm_key: 'amenity',
+              osm_type: 'N',
+              osm_value: 'restaurant',
+            },
+          }))
+        return new Response(JSON.stringify({
+          features,
+        }), { headers: { 'Content-Type': 'application/geo+json' } })
+      }
+      return new Response('Unavailable', { status: 504 })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const response = await handleMenuDiscovery(nearbyRequest({
+      lat: 37.7729681,
+      lon: -122.4214546,
+      radiusMiles: 5,
+    }), environment)
+    expect(response.status).toBe(200)
+    const data = await response.json() as {
+      source: string
+      elements: { type: string; id: number; tags: Record<string, string> }[]
+    }
+    expect(data.source).toBe('photon')
+    expect(data.elements).toHaveLength(55)
+    expect(data.elements.filter((element) => element.tags.shop === 'supermarket')).toHaveLength(5)
+    expect(data.elements.filter((element) => element.tags.amenity === 'restaurant')).toHaveLength(50)
+    expect(fetch).toHaveBeenCalledTimes(5)
   })
 })
 

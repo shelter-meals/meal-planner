@@ -53,10 +53,10 @@ export interface FoodPlace {
 
 export interface GroceryLine {
   id: string
-  groupId: string
   label: string
   detail: string
   quantity: number
+  unit: string
 }
 
 export function totalPeople(groups: MealGroup[]): number {
@@ -70,15 +70,72 @@ export function formatNeeds(group: MealGroup): string {
 }
 
 export function createGroceryLines(groups: MealGroup[]): GroceryLine[] {
-  return groups
+  const people = totalPeople(groups)
+  if (people === 0) return []
+
+  const sandwichLines = groups
     .filter((group) => group.count > 0)
-    .map((group) => ({
-      id: group.id,
-      groupId: group.id,
-      label: `Individually packaged complete meal for ${group.name}`,
-      detail: `${formatNeeds(group)}. Check the package label and contact the manufacturer or store about ingredients and cross-contact.`,
-      quantity: group.count,
-    }))
+    .map((group): GroceryLine => {
+      const vegan = group.diets.includes('Vegan')
+      const vegetarian = vegan || group.diets.includes('Vegetarian')
+      const dairyFree = group.diets.includes('Dairy-free') || group.allergens.includes('Milk')
+      const label = vegan
+        ? 'Vegan vegetable sandwiches'
+        : vegetarian
+          ? dairyFree
+            ? 'Dairy-free vegetable sandwiches'
+            : 'Cheese-and-vegetable sandwiches'
+          : 'Turkey-and-vegetable sandwiches'
+      const details: string[] = []
+
+      if (group.diets.includes('Gluten-free')) details.push('Use bread labeled gluten-free')
+      if (dairyFree) {
+        details.push('Use a dairy-free sandwich option')
+      } else if (group.diets.includes('Vegetarian') && !vegan) {
+        details.push('Use a vegetarian filling')
+      }
+      if (group.diets.includes('Halal')) details.push('Verify halal certification')
+      if (group.diets.includes('Kosher')) details.push('Verify kosher certification')
+      if (group.diets.includes('Pork-free')) details.push('Verify the sandwich contains no pork')
+      if (group.allergens.length) {
+        details.push(`Check every ingredient label for ${group.allergens.join(', ')} and confirm cross-contact with the store`)
+      }
+      if (group.notes.trim()) details.push(`Follow this group’s notes: ${group.notes.trim()}`)
+      if (!details.length) details.push('Buy ready-to-eat, individually wrapped sandwiches')
+
+      return {
+        id: `sandwiches-${group.id}`,
+        label,
+        detail: details.join('. '),
+        quantity: group.count,
+        unit: 'sandwiches',
+      }
+    })
+
+  return [
+    ...sandwichLines,
+    {
+      id: 'whole-fruit',
+      label: 'Whole apples',
+      detail: 'One per person',
+      quantity: people,
+      unit: 'apples',
+    },
+    {
+      id: 'plain-chips',
+      label: 'Single-serve bags of plain potato chips',
+      detail: 'One per person. Check labels for listed allergens and cross-contact.',
+      quantity: people,
+      unit: 'bags',
+    },
+    {
+      id: 'bottled-water',
+      label: 'Bottled water',
+      detail: 'One bottle per person',
+      quantity: people,
+      unit: 'bottles',
+    },
+  ]
 }
 
 let fallbackIdCounter = 0

@@ -37,16 +37,46 @@ describe('meal group calculations', () => {
     expect(isValidMealPlan([{ ...createMealGroup('fraction'), count: 1.5 }])).toBe(false)
   })
 
-  it('builds one editable grocery meal unit per person in each group', () => {
+  it('builds a ready-to-eat shopping list with quantities for each diet group', () => {
     const groups: MealGroup[] = [
       { ...createMealGroup('vegan'), name: 'Vegan and gluten-free', count: 3, diets: ['Vegan', 'Gluten-free'] },
       { ...createMealGroup('allergy'), name: 'Nut allergy', count: 2, allergens: ['Peanuts'] },
     ]
 
-    expect(createGroceryLines(groups).map(({ label, quantity }) => ({ label, quantity }))).toEqual([
-      { label: 'Individually packaged complete meal for Vegan and gluten-free', quantity: 3 },
-      { label: 'Individually packaged complete meal for Nut allergy', quantity: 2 },
+    expect(createGroceryLines(groups).map(({ label, quantity, unit }) => ({ label, quantity, unit }))).toEqual([
+      { label: 'Vegan vegetable sandwiches', quantity: 3, unit: 'sandwiches' },
+      { label: 'Turkey-and-vegetable sandwiches', quantity: 2, unit: 'sandwiches' },
+      { label: 'Whole apples', quantity: 5, unit: 'apples' },
+      { label: 'Single-serve bags of plain potato chips', quantity: 5, unit: 'bags' },
+      { label: 'Bottled water', quantity: 5, unit: 'bottles' },
     ])
+    expect(createGroceryLines(groups)[0].detail).toContain('gluten-free')
+    expect(createGroceryLines(groups)[1].detail).toContain('Peanuts')
+  })
+
+  it('scales ready-to-eat items for 20 people plus 2 vegetarians', () => {
+    const groups: MealGroup[] = [
+      { ...createMealGroup('regular'), name: 'Meal group 1', count: 20 },
+      { ...createMealGroup('vegetarian'), name: 'Vegetarian', count: 2, diets: ['Vegetarian'] },
+    ]
+
+    expect(createGroceryLines(groups).map(({ label, quantity, unit }) => ({ label, quantity, unit }))).toEqual([
+      { label: 'Turkey-and-vegetable sandwiches', quantity: 20, unit: 'sandwiches' },
+      { label: 'Cheese-and-vegetable sandwiches', quantity: 2, unit: 'sandwiches' },
+      { label: 'Whole apples', quantity: 22, unit: 'apples' },
+      { label: 'Single-serve bags of plain potato chips', quantity: 22, unit: 'bags' },
+      { label: 'Bottled water', quantity: 22, unit: 'bottles' },
+    ])
+  })
+
+  it('does not include cheese for vegetarian groups avoiding dairy', () => {
+    const lines = createGroceryLines([{
+      ...createMealGroup('vegan-dairy-free'),
+      count: 1,
+      diets: ['Vegetarian', 'Dairy-free'],
+    }])
+
+    expect(lines[0].label).toBe('Dairy-free vegetable sandwiches')
   })
 })
 
@@ -60,12 +90,24 @@ describe('San Francisco meal times', () => {
   })
 
   describe('nearby grocery listings', () => {
-    it('accepts food retailers and excludes fuel and alcohol retailers', () => {
+    it('accepts supermarkets and convenience stores but excludes specialty and non-food shops', () => {
       expect(isGroceryStore({ shop: 'supermarket' })).toBe(true)
       expect(isGroceryStore({ shop: 'convenience' })).toBe(true)
       expect(isGroceryStore({ shop: 'convenience', amenity: 'fuel' })).toBe(false)
+      expect(isGroceryStore({ shop: 'supermarket', amenity: 'car_wash' })).toBe(false)
       expect(isGroceryStore({ shop: 'convenience', 'fuel:diesel': 'yes' })).toBe(false)
+      expect(isGroceryStore({ shop: 'supermarket', name: 'Neighborhood Liquor' })).toBe(false)
+      expect(isGroceryStore({ shop: 'supermarket', name: 'Neighborhood Butchers' })).toBe(false)
+      expect(isGroceryStore({ shop: 'supermarket', name: 'Neighborhood Car Wash' })).toBe(false)
+      expect(isGroceryStore({ shop: 'convenience', name: 'New York Tobacco' })).toBe(false)
+      expect(isGroceryStore({ shop: 'convenience', name: 'Shell' })).toBe(false)
+      expect(isGroceryStore({ shop: 'convenience', name: 'Gift and Snack Shop' })).toBe(false)
       expect(isGroceryStore({ shop: 'alcohol' })).toBe(false)
+      expect(isGroceryStore({ shop: 'liquor' })).toBe(false)
+      expect(isGroceryStore({ shop: 'butcher' })).toBe(false)
+      expect(isGroceryStore({ shop: 'deli' })).toBe(false)
+      expect(isGroceryStore({ shop: 'health_food' })).toBe(false)
+      expect(isGroceryStore({ shop: 'greengrocer' })).toBe(false)
       expect(isGroceryStore({ shop: 'beverages' })).toBe(false)
     })
   })

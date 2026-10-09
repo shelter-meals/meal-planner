@@ -15,15 +15,6 @@ export default defineConfig({
           })
         },
       },
-      '/api/menu-discovery': {
-        target: 'http://127.0.0.1:8787',
-        changeOrigin: true,
-        configure: (proxy) => {
-          proxy.on('proxyReq', (proxyRequest) => {
-            proxyRequest.setHeader('Origin', 'http://localhost:5173')
-          })
-        },
-      },
     },
   },
 })

@@ -1,4 +1,4 @@
-import type { DietaryNeed, MealGroup } from './domain'
+import type { DietaryNeed, FoodPlace, MealGroup } from './domain'
 
 export interface PublishedMenuItem {
   id: string
@@ -40,6 +40,14 @@ export interface DraftOrderLine {
   options: PublishedMenuItem[]
   reason: string
   requiresAllergenConfirmation: boolean
+}
+
+export interface SuggestedOrderLine {
+  id: string
+  label: string
+  quantity: number
+  unit: string
+  detail: string
 }
 
 export interface RestaurantRankEvidence {
@@ -378,5 +386,145 @@ export function createDraftOrderLines(
         reason,
         requiresAllergenConfirmation: group.allergens.length > 0,
       }
+    })
+}
+
+function hasVegetarianDiet(group: MealGroup): boolean {
+  return group.diets.includes('Vegetarian') || group.diets.includes('Vegan')
+}
+
+function confirmationDetail(group: MealGroup): string {
+  const needs = [...group.diets, ...group.allergens.map((allergen) => `${allergen} allergy`)]
+  if (group.notes.trim()) needs.push('other stated needs')
+  return needs.length
+    ? `Confirm ${needs.join(', ')} and allergy cross-contact directly with the restaurant.`
+    : 'Confirm portions and availability with the restaurant.'
+}
+
+function suggestedLine(
+  group: MealGroup,
+  label: string,
+  unit: string,
+  detail: string,
+  quantity = group.count,
+): SuggestedOrderLine {
+  return {
+    id: `suggested-${group.id}`,
+    label,
+    quantity,
+    unit,
+    detail: `${detail} ${confirmationDetail(group)}`,
+  }
+}
+
+export function createFallbackOrderLines(groups: MealGroup[], place: FoodPlace): SuggestedOrderLine[] {
+  const placeDescription = [
+    place.name,
+    place.typeLabel,
+    place.tags.cuisine,
+    place.tags.description,
+    place.tags.brand,
+  ].filter(Boolean).join(' ').toLowerCase()
+  const isPizzaPlace = /\bpizza|pizzeria\b/.test(placeDescription)
+  const isHalalGuys = /\bhalal\s*guys\b/.test(place.name.toLowerCase())
+  const explicitlyHalal = isHalalGuys
+    || place.tags['diet:halal']?.toLowerCase() === 'yes'
+    || /\bhalal\b/.test(place.tags.cuisine ?? '')
+  const cuisineSuggestion = /\bmexican|taqueria|taco\b/.test(placeDescription)
+    ? { standard: 'Chicken or beef tacos with rice and beans', vegetarian: 'Bean-and-cheese burritos or vegetable tacos', vegan: 'Bean-and-vegetable burritos' }
+    : /\bindian|nepalese|pakistani\b/.test(placeDescription)
+      ? { standard: 'Chicken curry with rice', vegetarian: 'Paneer curry or dal with rice', vegan: 'Chana masala with rice' }
+      : /\bthai\b/.test(placeDescription)
+        ? { standard: 'Chicken curry with rice', vegetarian: 'Tofu curry with rice', vegan: 'Tofu and vegetable curry with rice' }
+        : /\bchinese|szechuan|sichuan|dim sum\b/.test(placeDescription)
+          ? { standard: 'Chicken and vegetable stir-fry with rice', vegetarian: 'Tofu and vegetable stir-fry with rice', vegan: 'Tofu and vegetable stir-fry with rice' }
+          : /\bjapanese|sushi|ramen\b/.test(placeDescription)
+            ? { standard: 'Chicken teriyaki rice bowls', vegetarian: 'Avocado or vegetable sushi rolls', vegan: 'Avocado or vegetable sushi rolls' }
+            : /\bkorean\b/.test(placeDescription)
+              ? { standard: 'Beef bulgogi rice bowls', vegetarian: 'Tofu bibimbap bowls', vegan: 'Tofu bibimbap bowls' }
+              : /\bmediterranean|greek|middle eastern|shawarma\b/.test(placeDescription)
+                ? { standard: 'Chicken shawarma plates with rice', vegetarian: 'Falafel plates with rice and vegetables', vegan: 'Falafel plates with rice and vegetables' }
+                : /\bburger|hamburger\b/.test(placeDescription)
+                  ? { standard: 'Cheeseburgers with a side', vegetarian: 'Veggie burgers with a side', vegan: 'Vegan veggie burgers with a side' }
+                  : /\bbarbecue|bbq\b/.test(placeDescription)
+                    ? { standard: 'BBQ chicken plates with sides', vegetarian: 'BBQ vegetable plates with beans and sides', vegan: 'BBQ vegetable plates with beans and sides' }
+                    : /\bseafood|fish\b/.test(placeDescription)
+                      ? { standard: 'Fish plates with rice and vegetables', vegetarian: 'Vegetable and rice entrees', vegan: 'Vegetable and rice entrees' }
+                      : /\bsandwich|deli\b/.test(placeDescription)
+                        ? { standard: 'Turkey sandwiches with a side', vegetarian: 'Vegetable-and-cheese sandwiches with a side', vegan: 'Vegetable sandwiches with a side' }
+                        : null
+
+  return groups
+    .filter((group) => group.count > 0)
+    .map((group) => {
+      if (group.diets.includes('Halal')) {
+        if (isPizzaPlace) {
+          const quantity = Math.ceil(group.count / 4)
+          return suggestedLine(
+            group,
+            'Vegetarian cheese pizzas',
+            'pizzas',
+            `${quantity} ${quantity === 1 ? 'pizza' : 'pizzas'} assumes about 2 slices per person and 8 slices per pizza.`,
+            quantity,
+          )
+        }
+        const label = hasVegetarianDiet(group)
+          ? group.diets.includes('Vegan')
+            ? cuisineSuggestion?.vegan ?? 'Vegan entrees'
+            : cuisineSuggestion?.vegetarian ?? 'Vegetarian entrees'
+          : explicitlyHalal
+            ? isHalalGuys
+              ? 'Halal gyro plates'
+              : `Halal ${cuisineSuggestion?.standard.toLowerCase() ?? 'protein entrees'}`
+            : cuisineSuggestion?.vegetarian ?? 'Vegetarian entrees'
+        return suggestedLine(group, label, 'entrees', 'Plan on one entree per person.')
+      }
+
+      if (isPizzaPlace) {
+        const dairyFree = group.diets.includes('Dairy-free') || group.allergens.includes('Milk')
+        const vegan = group.diets.includes('Vegan')
+        const restrictedMeat = group.diets.includes('Kosher')
+          || group.diets.includes('Pork-free')
+        const label = vegan
+          ? 'Vegan pizzas'
+          : dairyFree
+            ? 'Dairy-free pizzas'
+            : hasVegetarianDiet(group) || restrictedMeat
+              ? restrictedMeat && !hasVegetarianDiet(group)
+                ? 'Vegetarian pizzas; confirm certification'
+                : 'Cheese pizzas'
+              : 'Pepperoni pizzas'
+        const quantity = Math.ceil(group.count / 4)
+        return suggestedLine(
+          group,
+          label,
+          'pizzas',
+          `${quantity} ${quantity === 1 ? 'pizza' : 'pizzas'} assumes about 2 slices per person and 8 slices per pizza.`,
+          quantity,
+        )
+      }
+
+      if (isHalalGuys) {
+        const label = hasVegetarianDiet(group)
+          ? group.diets.includes('Vegan')
+            ? 'Vegan-friendly falafel or vegetable entrees'
+            : 'Falafel or vegetarian entrees'
+          : 'Gyro plates'
+        return suggestedLine(
+          group,
+          label,
+          'plates',
+          group.diets.includes('Vegan')
+            ? 'Ask whether the falafel and sauces are vegan and how they are prepared.'
+            : 'Plan on one plate per person.',
+        )
+      }
+
+      const label = group.diets.includes('Vegan')
+        ? cuisineSuggestion?.vegan ?? 'Vegan entrees'
+        : hasVegetarianDiet(group)
+          ? cuisineSuggestion?.vegetarian ?? 'Vegetarian entrees'
+          : cuisineSuggestion?.standard ?? 'Protein entrees'
+      return suggestedLine(group, label, 'entrees', 'Plan on one entree per person.')
     })
 }
